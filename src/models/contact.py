@@ -19,7 +19,9 @@ def canonicalize_phone(
     2. If it starts with the numeric international access code from config
        (e.g. ``00`` Europe, ``09`` US), replace that code with '+'.
     3. If it starts with '0', replace the leading '0' with '+' + country code.
-    4. Otherwise prepend '+' + country code + area code (without leading zero).
+    4. If it already carries the country code without '+' (E.164 form, e.g.
+       ``31703141414``), prepend '+' only when the remainder is 8-12 digits.
+    5. Otherwise prepend '+' + country code + area code (without leading zero).
 
     ``digits`` is expected to be sanitized first (only digits and an optional
     leading '+' - FR-014). Without regional config, falls back to the input as
@@ -38,6 +40,14 @@ def canonicalize_phone(
 
     if digits.startswith("0"):
         return "+" + country_digits + digits[1:]
+
+    # The number already carries the country code without the '+' (E.164 form
+    # without the international prefix). When the remainder has the length of a
+    # national number, prepend '+' only.
+    if digits.startswith(country_digits):
+        remainder = digits[len(country_digits) :]
+        if 8 <= len(remainder) <= 12:
+            return "+" + digits
 
     area_digits = re.sub(r"[^0-9]", "", area_code).lstrip("0")
     return "+" + country_digits + area_digits + digits

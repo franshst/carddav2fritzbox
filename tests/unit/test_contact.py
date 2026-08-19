@@ -33,6 +33,33 @@ class TestPhoneNumberCanonical:
     def test_sanitize_strips_non_numeric(self):
         assert PhoneNumber("  (030) 123-456 ").sanitize() == "030123456"
 
+    def test_country_code_without_plus_prepends_plus(self):
+        """E.164 without '+' is recognized and gets a '+' prefix only."""
+        assert (
+            PhoneNumber("31703141414").canonical(
+                country_code="+31", area_code="20", international_access_code="00"
+            )
+            == "+31703141414"
+        )
+
+    def test_country_code_without_plus_mobile(self):
+        """A mobile E.164 without '+' keeps the full number (FR-005)."""
+        assert (
+            PhoneNumber("31612345678").canonical(
+                country_code="+31", area_code="20", international_access_code="00"
+            )
+            == "+31612345678"
+        )
+
+    def test_country_code_without_plus_short_remainder_falls_back(self):
+        """A short remainder after the country digits is not treated as E.164."""
+        assert (
+            PhoneNumber("317031").canonical(
+                country_code="+31", area_code="20", international_access_code="00"
+            )
+            == "+3120317031"
+        )
+
 
 class TestContactIdentity:
     """Test Contact identity/dedup compares canonical forms (FR-018)."""

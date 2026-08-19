@@ -83,6 +83,99 @@ class TestPhoneNumberNormalizer:
         result = normalizer.validate_fritzbox_format("+1a2b3c")
         assert result is False
 
+    # --- FR-014 sanitization ---
+
+    def test_sanitize_strips_non_numeric_preserves_leading_plus(self):
+        """Test that sanitization strips non-numeric chars but keeps '+'
+        (FR-014)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.sanitize("+49 (30) 123-456.") == "+4930123456"
+
+    def test_sanitize_empty_string(self):
+        """Test that sanitization of an empty string returns empty."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.sanitize("") == ""
+
+    # --- FR-005 canonical normalization ---
+
+    def test_normalize_plus_passthrough(self):
+        """Test that a number starting with '+' is already canonical (FR-005)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.normalize("+4930123456") == "+4930123456"
+
+    def test_normalize_international_access_code_replaced(self):
+        """Test that the configured access code is replaced with '+' (FR-005)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.normalize("004930123456") == "+4930123456"
+
+    def test_normalize_custom_international_access_code(self):
+        """Test with a US-style international access code (011)."""
+        normalizer = PhoneNumberNormalizer("+1", "650", "011")
+        assert normalizer.normalize("011144125552671") == "+144125552671"
+
+    def test_normalize_leading_zero_replaced_with_country_code(self):
+        """Test that a leading '0' becomes '+' + country code (FR-005)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.normalize("030123456") == "+4930123456"
+
+    def test_normalize_prepends_country_and_area_code(self):
+        """Test prepending '+' + country code + area code (FR-005)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.normalize("1234567") == "+49301234567"
+
+    def test_normalize_area_code_without_leading_zero(self):
+        """Test that a leading zero in the configured area code is dropped."""
+        normalizer = PhoneNumberNormalizer("+49", "030", "00")
+        assert normalizer.normalize("1234567") == "+49301234567"
+
+    def test_normalize_sanitizes_before_canonicalizing(self):
+        """Test that sanitization happens before canonicalization (FR-014/005)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.normalize("+49 (30) 123-456") == "+4930123456"
+
+    def test_normalize_no_digits_returns_empty(self):
+        """Test that a number with no digits cannot be normalized (FR-019)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.normalize("(abc)") == ""
+
+    def test_normalize_e164_without_plus(self):
+        """E.164 without '+' (e.g. Nextcloud '31703141414') stays intact."""
+        normalizer = PhoneNumberNormalizer("+31", "20", "00")
+        assert normalizer.normalize("31703141414") == "+31703141414"
+        assert normalizer.normalize("0882692888") == "+31882692888"
+
+    # --- FR-006 FritzBox shortening ---
+
+    def test_shorten_local_same_area(self):
+        """Test dropping +, country code and equal area code (FR-006)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.shorten("+4930123456") == "0123456"
+
+    def test_shorten_local_different_area(self):
+        """Test keeping the area code when it differs from the configured one."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.shorten("+4940222111") == "040222111"
+
+    def test_shorten_mobile_number(self):
+        """Test that a mobile number only loses '+' and country code."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.shorten("+491512345678") == "01512345678"
+
+    def test_shorten_foreign_number_kept_canonical(self):
+        """Test that a foreign number stays in canonical form (FR-006)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.shorten("+442079460958") == "+442079460958"
+
+    def test_shorten_number_without_plus_passthrough(self):
+        """Test that a non-canonical input passes through unchanged."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.shorten("30123456") == "30123456"
+
+    def test_format_for_fritzbox_uses_shorten(self):
+        """Test that format_for_fritzbox is the export-time shortening step."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        assert normalizer.format_for_fritzbox("+4930123456") == "0123456"
+
 
 class TestImageConverter:
     """Test ImageConverter class."""
@@ -309,6 +402,62 @@ class TestValidateAndNormalizeContact:
         result = validate_and_normalize_contact(contact)
         assert result.picture_data == b"photo_data"
         assert result.picture_url is None
+
+    # --- FR-019 skip unnormalizable numbers with warning ---
+
+    def test_validate_skips_unnormalizable_with_warning(self, capsys):
+        """Test that unnormalizable numbers are skipped with a stderr warning
+        while valid ones are kept (FR-019)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        contact = Contact(
+            name="John Doe",
+            phone_numbers=[
+                PhoneNumber(number="(abc)", type="home", prio=0),
+                PhoneNumber(number="030123456", type="mobile", prio=1),
+            ],
+            emails=[EmailAddress(email="john@example.com", classifier="private")],
+        )
+
+        result = validate_and_normalize_contact(contact, normalizer)
+
+        assert result.name == "John Doe"
+        assert len(result.phone_numbers) == 1
+        assert result.phone_numbers[0].number == "+4930123456"
+        assert len(result.emails) == 1
+
+        captured = capsys.readouterr()
+        assert "Skipping unnormalizable phone number" in captured.err
+        assert "(abc)" in captured.err
+
+    def test_validate_all_unnormalizable_keeps_contact(self, capsys):
+        """Test that a contact survives when all its numbers are skipped."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        contact = Contact(
+            name="Jane Doe",
+            phone_numbers=[PhoneNumber(number="no-digits", type="home", prio=0)],
+            emails=[],
+        )
+
+        result = validate_and_normalize_contact(contact, normalizer)
+
+        assert result.name == "Jane Doe"
+        assert len(result.phone_numbers) == 0
+
+        captured = capsys.readouterr()
+        assert "Skipping" in captured.err
+
+    def test_validate_stores_canonical_not_shortened(self):
+        """Test that the normalize stage stores canonical form (FR-018)."""
+        normalizer = PhoneNumberNormalizer("+49", "30", "00")
+        contact = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="030123456", type="mobile", prio=1)],
+            emails=[],
+        )
+
+        result = validate_and_normalize_contact(contact, normalizer)
+
+        assert result.phone_numbers[0].number == "+4930123456"
 
 
 if __name__ == "__main__":

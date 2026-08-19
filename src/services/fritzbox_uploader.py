@@ -14,6 +14,7 @@ Key features:
 
 import hashlib
 import logging
+import re
 import requests
 import time
 import xml.etree.ElementTree as ET
@@ -23,6 +24,8 @@ from xml.dom import minidom
 
 from src.models.contact import Contact, PhoneNumber, EmailAddress
 from src.config.loader import FritzBoxConfig
+from src.services.converter import PhoneNumberNormalizer
+from src.services.tr064 import Tr064Client
 
 
 @dataclass
@@ -56,6 +59,23 @@ class PhonebookXML:
     contacts: List[ContactXML] = field(default_factory=list)
 
 
+_PB_SUCCESS_MARKERS = (
+    "wurde wiederhergestellt",
+    "is hersteld",
+    "wurde wiederhergestellt",
+    "was restored",
+    "phonebook restored",
+)
+
+_PB_ERROR_MARKERS = (
+    "invalid variable name",
+    "mislukt",
+    "failed",
+    "fehlgeschlagen",
+    "fehler",
+)
+
+
 class FritzBoxUploader:
     """Handles authentication and contact upload to FritzBox devices.
 
@@ -71,17 +91,26 @@ class FritzBoxUploader:
         logger: Logger instance for logging operations
     """
 
-    def __init__(self, config: FritzBoxConfig, logger: logging.Logger):
+    def __init__(
+        self,
+        config: FritzBoxConfig,
+        logger: logging.Logger,
+        normalizer: Optional[PhoneNumberNormalizer] = None,
+    ):
         """Initialize the FritzBox uploader.
 
         Args:
             config: FritzBox configuration
             logger: Logger instance
+            normalizer: Optional PhoneNumberNormalizer used to shorten numbers
+                at export time (FR-006). When None, numbers are uploaded in
+                their canonical form.
         """
         self.config = config
         self.logger = logger
         self.session_id: Optional[str] = None
         self.host = config.host
+        self.normalizer = normalizer
 
     def authenticate(self) -> bool:
         """Authenticate with FritzBox using challenge-response mechanism.
@@ -201,16 +230,24 @@ class FritzBoxUploader:
         return f"{parts[4]}${hash_2.hex()}"
 
     def upload_phonebook(
-        self, contacts: List[Contact], phonebook_name: str, phonebook_id: int = 0
+        self,
+        contacts: List[Contact],
+        phonebook_name: str,
+        phonebook_id: Optional[int] = None,
     ) -> bool:
         """Upload contacts to FritzBox using mirror sync (overwrite).
 
         This method implements FR-011 and FR-012: mirror sync with complete overwrite.
 
+        When ``phonebook_id`` is ``None`` the target book is resolved by name
+        (``config.target_book``) via TR-064; the book is created when it does
+        not exist yet. When TR-064 is unavailable the main phonebook (0) is
+        used as a fallback.
+
         Args:
             contacts: List of Contact objects to upload
             phonebook_name: Name of the target phonebook in FritzBox
-            phonebook_id: ID of the phonebook (0 for default, 1, 2, etc.)
+            phonebook_id: ID of the phonebook (None to resolve by name)
 
         Returns:
             True if upload succeeds, False otherwise
@@ -220,13 +257,23 @@ class FritzBoxUploader:
                 if not self.authenticate():
                     return False
 
+            target_id = self._resolve_phonebook_id(phonebook_id)
+
+            # Contacts without phone numbers cannot be stored by the FritzBox
+            # import (verified: firmwarecfg silently drops them), so skip them
+            # with a warning so the reported count matches the box.
+            for contact in contacts:
+                if not contact.phone_numbers:
+                    self.logger.warning(
+                        f"Skipping contact without a phone number: {contact.name}"
+                    )
+            contacts = [c for c in contacts if c.phone_numbers]
+
             # Generate XML document
             phonebook_xml = self._generate_phonebook_xml(contacts, phonebook_name)
 
             # Upload via multipart/form-data
-            success = self._upload_to_fritzbox(
-                phonebook_xml, phonebook_name, phonebook_id
-            )
+            success = self._upload_to_fritzbox(phonebook_xml, phonebook_name, target_id)
 
             if success:
                 self.logger.info(
@@ -240,6 +287,50 @@ class FritzBoxUploader:
         except Exception as e:
             self.logger.error(f"Error during FritzBox upload: {e}")
             return False
+
+    def _resolve_phonebook_id(self, phonebook_id: Optional[int]) -> int:
+        """Resolve the phonebook id to upload into.
+
+        An explicit ``phonebook_id`` wins. Otherwise the book is resolved by
+        name via TR-064 (creating it when missing); when TR-064 is not
+        available the main phonebook (0) is returned as a fallback.
+
+        Args:
+            phonebook_id: Explicit phonebook id, or None to resolve by name
+
+        Returns:
+            The phonebook id to upload into
+        """
+        if phonebook_id is not None:
+            return phonebook_id
+
+        try:
+            client = Tr064Client(
+                self.host,
+                self.config.username,
+                self.config.password,
+                self.logger,
+            )
+            resolved = client.resolve_phonebook_id(self.config.target_book)
+        except Exception as e:
+            self.logger.warning(
+                f"TR-064 phonebook resolution failed: {e}; "
+                "falling back to the main phonebook (0)"
+            )
+            return 0
+
+        if resolved is not None:
+            self.logger.info(
+                f"Resolved target phonebook '{self.config.target_book}' "
+                f"to phonebook id {resolved}"
+            )
+            return resolved
+
+        self.logger.warning(
+            "Could not resolve the target phonebook by name; "
+            "falling back to the main phonebook (0)"
+        )
+        return 0
 
     def _generate_phonebook_xml(
         self, contacts: List[Contact], phonebook_name: str
@@ -335,11 +426,14 @@ class FritzBoxUploader:
             image_url=contact.picture_url,
         )
 
-        # Convert phone numbers
+        # Convert phone numbers (shorten for FritzBox at export time, FR-006)
         for phone in contact.phone_numbers:
+            number = phone.number
+            if self.normalizer is not None:
+                number = self.normalizer.format_for_fritzbox(number)
             contact_xml.phone_numbers.append(
                 PhoneNumber(
-                    number=phone.number,
+                    number=number,
                     type=phone.type,
                     prio=phone.prio,
                     quickdial=phone.quickdial,
@@ -391,9 +485,8 @@ class FritzBoxUploader:
             files = {
                 "sid": (None, self.session_id),
                 "PhonebookId": (None, str(phonebook_id)),
-                "PhonebookImportName": (None, phonebook_name),
                 "PhonebookImportFile": (
-                    "phonebook.xml",
+                    "updatepb.xml",
                     xml_content.encode("utf-8"),
                     "text/xml",
                 ),
@@ -402,26 +495,56 @@ class FritzBoxUploader:
             response = requests.post(url, files=files, timeout=30)
             response.raise_for_status()
 
-            # Parse response
-            response_xml = ET.fromstring(response.content)
-            success = response_xml.findtext("success") == "1"
+            # The FritzBox answers with an HTML page in the UI language
+            # (e.g. "Das Telefonbuch der FRITZ!Box wurde wiederhergestellt."),
+            # not XML, so success is detected via text markers (FR-011).
+            body = response.text
+            lowered = body.lower()
 
-            if success:
+            if any(marker in lowered for marker in _PB_ERROR_MARKERS):
+                self.logger.error(
+                    f"FritzBox upload failed: {self._extract_message(body)}"
+                )
+                return False
+
+            if any(marker in lowered for marker in _PB_SUCCESS_MARKERS):
                 self.logger.info(
                     f"Successfully uploaded phonebook '{phonebook_name}' to FritzBox"
                 )
-            else:
-                error_msg = response_xml.findtext("error") or "Unknown error"
-                self.logger.error(f"FritzBox upload failed: {error_msg}")
+                return True
 
-            return success
+            self.logger.error(
+                f"FritzBox upload returned an unknown response: "
+                f"{self._extract_message(body)}"
+            )
+            return False
 
         except Exception as e:
             self.logger.error(f"Error uploading to FritzBox: {e}")
             return False
 
+    @staticmethod
+    def _extract_message(html: str) -> str:
+        """Extract a readable message from the FritzBox response page."""
+        lowered = html.lower()
+        for marker in _PB_ERROR_MARKERS:
+            idx = lowered.find(marker)
+            if idx >= 0:
+                start = max(0, idx - 200)
+                end = min(len(html), idx + 120)
+                snippet = html[start:end].replace("\n", " ").strip()
+                if snippet:
+                    return snippet
+        stripped = re.sub(r"<[^>]+>", " ", html)
+        return re.sub(r"\s+", " ", stripped).strip()[:300] or "Unknown error"
+
     def test_connection(self) -> bool:
         """Test connection to FritzBox.
+
+        The probe only checks that the device is reachable and answers the
+        ``login_sid.lua`` endpoint with a valid SessionInfo document. An
+        unauthenticated session (``SID=0000000000000000``) is a normal
+        pre-auth state and does not indicate a connection failure.
 
         Returns:
             True if connection test succeeds, False otherwise
@@ -434,7 +557,7 @@ class FritzBoxUploader:
             tree = ET.fromstring(response.content)
             sid = tree.findtext("SID")
 
-            if sid == "0000000000000000":
+            if sid is None:
                 return False
 
             return True

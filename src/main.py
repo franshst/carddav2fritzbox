@@ -123,8 +123,15 @@ def run_sync(config, dry_run: bool = False) -> bool:
         logger.info("Initializing image converter...")
         converter = ImageConverter(logger)
 
+        logger.info("Initializing phone number normalizer...")
+        normalizer = PhoneNumberNormalizer(
+            country_code=config.regional.country_code,
+            area_code=config.regional.area_code,
+            international_access_code=config.regional.international_access_code,
+        )
+
         logger.info("Initializing FritzBox uploader...")
-        uploader = FritzBoxUploader(config.fritzbox, logger)
+        uploader = FritzBoxUploader(config.fritzbox, logger, normalizer=normalizer)
 
         # Test FritzBox connection
         logger.info("Testing FritzBox connection...")
@@ -145,11 +152,6 @@ def run_sync(config, dry_run: bool = False) -> bool:
         # Process and normalize contacts
         logger.info("Processing and normalizing contacts...")
         normalized_contacts = []
-        normalizer = PhoneNumberNormalizer(
-            country_code=config.regional.country_code,
-            area_code=config.regional.area_code,
-            international_access_code=config.regional.international_access_code,
-        )
 
         for i, contact in enumerate(contacts):
             # Process photo
@@ -174,12 +176,12 @@ def run_sync(config, dry_run: bool = False) -> bool:
             logger.info("Dry run completed successfully")
             return True
 
-        # Upload contacts to FritzBox
+        # Upload contacts to FritzBox (target book is resolved by name via TR-064)
         logger.info("Uploading contacts to FritzBox...")
         success = uploader.upload_phonebook(
             normalized_contacts,
             config.fritzbox.target_book,
-            phonebook_id=0,  # Default to first phonebook
+            phonebook_id=None,
         )
 
         if success:

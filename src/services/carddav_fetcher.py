@@ -170,7 +170,10 @@ class CardDAVFetcher:
 
         Per RFC 6764 the well-known URI redirects to the home set; when that
         fails (e.g. server without well-known support) fall back to a PROPFIND
-        on the configured source URL.
+        on the configured source URL. When the home set responds but exposes no
+        ``addressbook`` resources at Depth 1 (e.g. Nextcloud redirects to the
+        generic ``/remote.php/dav`` root), the configured URL is probed too,
+        since it may itself point directly at an address book.
         """
         base = source_config.url
         well_known = urljoin(base, "/.well-known/carddav")
@@ -189,10 +192,30 @@ class CardDAVFetcher:
                 f"falling back to PROPFIND on the configured URL"
             )
 
-        if not home_set:
-            home_set = base
+        candidates = [home_set] if home_set else []
+        if base not in candidates:
+            candidates.append(base)
 
-        return self._propfind_addressbooks(session, home_set)
+        addressbooks = []
+        for target in candidates:
+            try:
+                addressbooks.extend(self._propfind_addressbooks(session, target))
+            except requests.RequestException as e:
+                self.logger.warning(
+                    f"PROPFIND failed for {target}: {e}; "
+                    f"trying next discovery candidate"
+                )
+            if addressbooks:
+                break
+
+        # Deduplicate while preserving discovery order (FR-009).
+        seen = set()
+        unique = []
+        for addressbook in addressbooks:
+            if addressbook not in seen:
+                seen.add(addressbook)
+                unique.append(addressbook)
+        return unique
 
     def _propfind_addressbooks(self, session: requests.Session, url: str) -> List[str]:
         """PROPFIND a URL and collect hrefs that are CardDAV address books."""

@@ -71,3 +71,6 @@ logs/
 # Virtual environment
 .venv/
 
+#speckit session files
+./specify/feature.json
+

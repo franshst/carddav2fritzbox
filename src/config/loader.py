@@ -175,15 +175,30 @@ def _load_general_config(parser: configparser.ConfigParser) -> GeneralConfig:
     return GeneralConfig(name_order=name_order)
 
 
+def _resolve_credential(
+    env_name: str, parser: configparser.ConfigParser, section: str, option: str
+) -> str:
+    """Resolve a credential from the environment, falling back to the config file.
+
+    Environment variables take precedence over config file values (US2,
+    FR-002/FR-007). When the environment variable is unset or empty the value
+    is read from the INI file as before.
+    """
+    env_value = os.environ.get(env_name)
+    if env_value:
+        return env_value.strip()
+    return parser.get(section, option)
+
+
 def _load_fritzbox_config(parser: configparser.ConfigParser) -> FritzBoxConfig:
     """Load FritzBox configuration section."""
     if not parser.has_section("fritzbox"):
         raise ValueError("Missing required 'fritzbox' section in configuration")
 
-    # Required fields
+    # Required fields (credentials may come from environment variables)
     url = parser.get("fritzbox", "url")
-    username = parser.get("fritzbox", "username")
-    password = parser.get("fritzbox", "password")
+    username = _resolve_credential("FRITZBOX_USERNAME", parser, "fritzbox", "username")
+    password = _resolve_credential("FRITZBOX_PASSWORD", parser, "fritzbox", "password")
 
     # Optional fields with defaults
     target_book = parser.get("fritzbox", "target_book", fallback="CardDAV Sync")
@@ -251,11 +266,18 @@ def _load_carddav_sources_config(
             try:
                 # Required fields
                 url = parser.get(section, "url")
-                username = parser.get(section, "username")
-                password = parser.get(section, "password")
 
                 # Optional priority field (default to 1 if not specified)
                 priority = parser.getint(section, "priority", fallback=1)
+
+                # Credentials may come from environment variables keyed by
+                # source priority (CARDDAV_<priority>_USERNAME/PASSWORD)
+                username = _resolve_credential(
+                    f"CARDDAV_{priority}_USERNAME", parser, section, "username"
+                )
+                password = _resolve_credential(
+                    f"CARDDAV_{priority}_PASSWORD", parser, section, "password"
+                )
 
                 sources.append(
                     CardDAVSourceConfig(

@@ -6,7 +6,7 @@
 |---|---|---|---|
 | FritzBox Authentication | T004 | **Completed** | `login_sid.lua` Challenge-Response (MD5 / PBKDF2 UTF-16LE) returning 16-character `sid`. |
 | FritzBox HTTP API | T004 | **Completed** | Multipart POST to `/cgi-bin/firmwarecfg` for full phonebook overwrite / mirror sync. |
-| FritzBox TR-064 API | T004 | **Completed** | SOAP service `X_AVM-DE_OnTel:1` (`GetPhonebookList`, `GetPhonebook`) available for reading/metadata. |
+| FritzBox TR-064 API | T004 | **Completed** | SOAP `X_AVM-DE_OnTel:1` (Digest auth): `GetPhonebookList`, `GetPhonebook`, `AddPhonebook`, `DeletePhonebook`; resolves/creates the `target_book` by name (main book 0 can't be renamed). |
 | FritzBox XML Schema | T004 | **Completed** | Hierarchy: `<phonebooks><phonebook><contact><person><realName>...</realName></person><telephony>...</telephony><services><email>...</email></services></contact></phonebook></phonebooks>`. |
 | CardDAV API | T001-T003 | **Completed** | **Use `requests` + `vobject`.** The `caldav` library is CalDAV-only (no `AddressBook`/`AddressObject` support) and was removed. RFC 6352 PROPFIND/REPORT implemented directly over `requests`. |
 | Supported Fields | T005 | **Completed** | Mapped vCard fields (FN/N, TEL types, EMAIL classifiers, PHOTO, VIP) to FritzBox XML. |
@@ -77,14 +77,58 @@ For mirroring contacts (overwriting a target address book cleanly), FRITZ!OS pro
 ### 3.2 Form Parameters
 - `sid`: The valid 16-character Session ID.
 - `PhonebookId`: Numeric ID of the target address book (e.g., `0` for default, `1`, `2` for secondary address books).
-- `PhonebookImportName`: Name of the phonebook (e.g., `"CardDAV Sync"`).
-- `PhonebookImportFile`: The raw XML string or file upload payload containing the `<phonebooks>` structure.
+- `PhonebookImportFile`: The raw XML string or file upload payload containing the `<phonebooks>` structure (filename `updatepb.xml`, content type `text/xml`).
+
+> **Verified against real hardware (FRITZ!OS 7.x, Aug 2026):** a `PhonebookImportName`
+> form field is rejected with `Invalid variable name.` and must be omitted. The phonebook
+> name comes from the uploaded `<phonebook name="...">` element. The response is an HTML
+> page in the UI language (German/Dutch/English success phrases such as
+> "Das Telefonbuch der FRITZ!Box wurde wiederhergestellt." / "is hersteld."), **not XML**;
+> success is detected via text markers.
 
 ### 3.3 Mirror Sync Overwrite Behavior
 When `PhonebookImportFile` is POSTed to `/cgi-bin/firmwarecfg` for a specific `PhonebookId`:
 - The FritzBox completely replaces all contacts within that specified `PhonebookId`.
 - Contacts existing on the FritzBox that are omitted from the uploaded XML are automatically removed (pruned).
 - This perfectly matches **FR-011** and **FR-012** (mirror sync/overwrite requirement) in a single atomic operation without needing individual contact deletion API calls.
+
+### 3.4 TR-064 Phonebook Management (`X_AVM-DE_OnTel:1`)
+
+> **Verified against real hardware (FRITZ!Box 7581, FRITZ!OS 07.18, Aug 2026).**
+> Used to honor the configured `target_book` name, because the **main phonebook
+> (id 0) can be neither renamed nor deleted** (AVM documentation); the firmwarecfg
+> import keeps its name ("Telefoonboek") no matter what the uploaded XML says.
+
+Service discovery: `GET http://<fritz.box>:49000/tr64desc.xml`; the OnTel control
+URL is `/upnp/control/x_contact`. Authentication is **HTTP Digest auth** with the
+regular FRITZ!Box credentials (Basic auth is rejected with 401; the
+`X_AVM-DE_Auth:1` `SetConfig` flow is not required on this firmware).
+
+Actions used (`src/services/tr064.py`):
+
+| Action | Arguments | Return |
+|---|---|---|
+| `GetPhonebookList` | – | `NewPhonebookList`: comma-separated **indexes** |
+| `GetPhonebook` | `NewPhonebookID` (index) | `NewPhonebookName`, `NewPhonebookExtraID`, `NewPhonebookURL` (carries the **real** id as `pbid=<id>`) |
+| `AddPhonebook` | `NewPhonebookExtraID` (""), `NewPhonebookName` | creates a book; error **820** when the name already exists |
+| `DeletePhonebook` | `NewPhonebookID` (index), `NewPhonebookExtraID` ("" ) | deletes the book at the given **index** |
+
+Key semantics (empirically confirmed):
+- `GetPhonebookList` returns **indexes** `0,1,2,...`; the *real* book id is the
+  `pbid` in `NewPhonebookURL` (real ids can be sparse, e.g. `0,1,2,40,41`).
+- The firmwarecfg `PhonebookId` form field expects the **real** id, not the index.
+- `DeletePhonebook` takes the **index**, not the real id (passing a real id that
+  is not a valid index returns UPnP error 402).
+- Importing into a **secondary** (non-0) book **creates** the book when it does
+  not exist and applies the XML `<phonebook name="...">`; re-importing renames an
+  existing secondary book to the XML name.
+- The **main book (0) is exempt**: it is never renamed by an import.
+
+This enables resolving `target_book` by name: enumerate `GetPhonebookList` →
+`GetPhonebook` per index; on a name match use the real id for the firmwarecfg
+import; when absent, `AddPhonebook(target_book)` then re-enumerate. When TR-064
+is unreachable (port 49000 closed) the uploader falls back to the main book (0)
+with a warning.
 
 ---
 

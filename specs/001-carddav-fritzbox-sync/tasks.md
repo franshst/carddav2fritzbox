@@ -70,14 +70,14 @@ The spec was clarified (Session 2026-08-19: canonical number normalization/short
 - [x] T012 [P] [US1] REDO PhoneNumberNormalizer: implement the canonical normalization algorithm (FR-005: leading `+` passthrough, international-access-code replacement, leading `0` -> `+`+country code, else prepend `+`+country+area code) and FritzBox shortening (FR-006: keep canonical if foreign country; else drop `+`+CC, add leading `0`, remove area code when equal) in src/services/converter.py
 - [x] T013 [P] [US1] REDO FritzBox uploader: add PBKDF2-HMAC-SHA256 challenge-response for FRITZ!OS 7.24+ (challenge prefix `2$`), keeping the legacy MD5 path (research.md section 2.1) in src/services/fritzbox_uploader.py
 - [x] T014 [US1] REDO CLI main: fix the empty `for` loop causing `IndentationError` at src/main.py:156 and wire the new config fields (`area_code`, `international_access_code`) into the normalizer in src/main.py
-- [ ] T015 [P] [US1] Remove `caldav` from the venv and confirm no `import caldav` remains in src/; verify runtime imports `requests`, `vobject`, `PIL` from .venv
+- [x] T015 [P] [US1] Remove `caldav` from the venv and confirm no `import caldav` remains in src/; verify runtime imports `requests`, `vobject`, `PIL` from .venv
 
 ### Tests for User Story 1
 
-- [ ] T016 [P] [US1] Unit tests for canonical normalization, FritzBox shortening, and skip-unnormalizable-with-warning (FR-005/006/019) in tests/unit/test_converter.py
-- [ ] T017 [P] [US1] Unit tests for config validation: missing `country_code`/`area_code` raises a clear error (FR-017) in tests/unit/test_config.py
-- [ ] T018 [P] [US1] Unit tests for PBKDF2 and MD5 challenge-response calculation in tests/unit/test_fritzbox_auth.py
-- [ ] T019 [US1] Integration test: fetch from a mocked DAV server, merge by priority, normalize, and produce the FritzBox XML phonebook in tests/integration/test_sync_workflow.py
+- [x] T016 [P] [US1] Unit tests for canonical normalization, FritzBox shortening, and skip-unnormalizable-with-warning (FR-005/006/019) in tests/unit/test_converter.py
+- [x] T017 [P] [US1] Unit tests for config validation: missing `country_code`/`area_code` raises a clear error (FR-017) in tests/unit/test_config.py
+- [x] T018 [P] [US1] Unit tests for PBKDF2 and MD5 challenge-response calculation in tests/unit/test_fritzbox_auth.py
+- [x] T019 [US1] Integration test: fetch from a mocked DAV server, merge by priority, normalize, and produce the FritzBox XML phonebook in tests/integration/test_sync_workflow.py
 
 **Checkpoint**: At this point, User Story 1 is fully functional and testable independently.
 
@@ -93,12 +93,12 @@ The spec was clarified (Session 2026-08-19: canonical number normalization/short
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] Implement environment-variable credential resolution in src/config/loader.py (e.g. `FRITZBOX_USERNAME`/`FRITZBOX_PASSWORD`, `CARDDAV_<n>_USERNAME`/`CARDDAV_<n>_PASSWORD`) with precedence: environment variable over config file value
-- [ ] T021 [P] [US2] Document env-var credential override usage in README.md (config.ini is already excluded from git via .gitignore)
+- [x] T020 [US2] Implement environment-variable credential resolution in src/config/loader.py (e.g. `FRITZBOX_USERNAME`/`FRITZBOX_PASSWORD`, `CARDDAV_<n>_USERNAME`/`CARDDAV_<n>_PASSWORD`) with precedence: environment variable over config file value
+- [x] T021 [P] [US2] Document env-var credential override usage in README.md (config.ini is already excluded from git via .gitignore)
 
 ### Tests for User Story 2
 
-- [ ] T022 [P] [US2] Unit tests for env-var credential resolution and precedence in tests/unit/test_config.py
+- [x] T022 [P] [US2] Unit tests for env-var credential resolution and precedence in tests/unit/test_config.py
 
 **Checkpoint**: User Stories 1 and 2 both work independently.
 
@@ -108,9 +108,22 @@ The spec was clarified (Session 2026-08-19: canonical number normalization/short
 
 **Purpose**: Final validation and cleanup affecting all user stories
 
-- [ ] T023 Run quickstart.md end-to-end validation against a test config (dry-run, then upload if a FritzBox is available)
+- [x] T023 Run quickstart.md end-to-end validation against a test config (dry-run, then upload if a FritzBox is available)
+- [ ] T026 Real-device end-to-end test: ask the user to confirm config.ini is correctly filled with test credentials (real CardDAV sources and FritzBox, NOT production data), then run `python src/main.py --config config.ini --validate-only` and `--dry-run` against the real services; run a real upload only after explicit user confirmation (mirror sync completely overwrites the target phonebook)
 - [ ] T024 [P] Full quality gate: `pytest`, `flake8`, `black --check`, `isort --check` all pass
 - [x] T025 Documentation updates in docs/ and README.md
+
+### User-Reported Fixes (real-device validation round, 2026-08-19)
+
+Fixes for issues found in the T023 real upload: the phonebook kept its stock
+name, numbers were uploaded in full length, and an ANWB number (`31703141414`,
+E.164 without `+`) was mangled to `+312031703141414`.
+
+- [x] T027 Fix `canonicalize_phone`: recognize E.164-without-`+` (country code present, 8-12 digit remainder) before the area-code fallback in src/models/contact.py; tests in tests/unit/test_contact.py + tests/unit/test_converter.py
+- [x] T028 Wire FR-006 export shortening: pass the `PhoneNumberNormalizer` into `FritzBoxUploader` and apply `format_for_fritzbox` in `_convert_contact_to_xml`; tests in tests/unit/test_fritzbox_auth.py
+- [x] T029 Resolve the target phonebook by name via TR-064 (`X_AVM-DE_OnTel:1`, Digest auth): add src/services/tr064.py, resolve/create `target_book` in the uploader, fall back to book 0 when TR-064 is unreachable; tests in tests/unit/test_tr064.py + test_fritzbox_auth.py
+- [x] T030 Re-verify on the real device: `--validate-only` + `--dry-run` exit 0; real upload goes into the book named `target_book` with shortened numbers and the ANWB number intact. Verified: book "Test" (index 1, real id 2) holds the contacts, ANWB `0703141414` + `0882692888` present, numbers shortened. Also confirmed the box silently drops numberless contacts on import (probe book test); uploader now skips them with a warning so the reported count matches the box (see T031)
+- [x] T031 Skip contacts without a phone number in `FritzBoxUploader.upload_phonebook` with a warning (the FritzBox import silently drops them); test in tests/unit/test_fritzbox_auth.py
 
 ---
 
@@ -122,7 +135,7 @@ The spec was clarified (Session 2026-08-19: canonical number normalization/short
 - **Foundational (Phase 2)**: Complete (depends on Setup)
 - **User Story 1 (Phase 3)**: Depends on Foundational; redo tasks can proceed in parallel
 - **User Story 2 (Phase 4)**: Depends on T010 (config loader) — env-var resolution extends it
-- **Polish (Phase 5)**: Depends on US1 and US2 completion
+- **Polish (Phase 5)**: Depends on US1 and US2 completion; T026 (real-device test) requires user-confirmed test credentials in config.ini and runs after T014/T023
 
 ### User Story Dependencies
 

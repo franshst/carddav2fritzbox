@@ -18,12 +18,40 @@ Support the legacy MD5 scheme and the PBKDF2 scheme (FRITZ!OS 7.24+, challenge p
 
 | Field | Value |
 |---|---|
-| `sid` | session id from login |
+| `sid` | session id from login (must be the first field) |
 | `PhonebookId` | `0` (default) or configured id |
-| `PhonebookImportName` | target phonebook name |
-| `PhonebookImportFile` | `phonebook.xml`, content type `text/xml` |
+| `PhonebookImportFile` | `updatepb.xml`, content type `text/xml` |
 
-This **replaces the entire target phonebook** (mirror sync, FR-011/FR-012); omitted contacts are pruned. Success is indicated by `<success>1</success>` in the response.
+Verified against real hardware (FRITZ!OS 7.x, Aug 2026): a `PhonebookImportName`
+form field is **rejected** with `Invalid variable name.` and must be omitted.
+The phonebook name in the uploaded `<phonebook name="...">` element is used.
+
+This **replaces the entire target phonebook** (mirror sync, FR-011/FR-012); omitted contacts are pruned. The response is an HTML page in the UI language, **not XML** — success is detected by text markers:
+
+- German: `Das Telefonbuch der FRITZ!Box wurde wiederhergestellt.`
+- Dutch: `Het telefoonboek van de FRITZ!Box is hersteld.`
+- English: `FRITZ!Box telephone book restored.`
+
+Error responses carry markers such as `Invalid variable name.` / `mislukt` / `failed`; any unrecognized body is treated as failure (logged).
+
+## Phonebook resolution (TR-064 `X_AVM-DE_OnTel:1`)
+
+`POST http://<host>:49000/upnp/control/x_contact` with SOAP + **HTTP Digest auth**
+(credentials identical to the web UI; Basic auth is rejected). The firmwarecfg
+`PhonebookId` field expects the **real** book id (`pbid` from `NewPhonebookURL`).
+The main phonebook (0) can be neither renamed nor deleted; secondary books adopt
+the uploaded XML `<phonebook name="...">` on import. See research.md §3.4.
+
+| Action | In args | Purpose |
+|---|---|---|
+| `GetPhonebookList` | – | comma-separated book **indexes** |
+| `GetPhonebook` | `NewPhonebookID` (index) | name + URL with real id `pbid=` |
+| `AddPhonebook` | `NewPhonebookExtraID` (""), `NewPhonebookName` | create book (error 820 if name exists) |
+| `DeletePhonebook` | `NewPhonebookID` (index), `NewPhonebookExtraID` ("") | delete book at index |
+
+Resolution flow: enumerate indexes → read names → pick the book named
+`target_book` (create it via `AddPhonebook` when missing) → upload into its real id.
+If TR-064 is unreachable, fall back to the main book (0) with a warning.
 
 ## Phonebook XML Schema
 

@@ -13,6 +13,10 @@ intelligently merges the same contact from multiple sources into a single one.
 
 - **Multi-Source CardDAV Support**: Sync contacts from multiple CardDAV sources
 - **Phone Number Normalization**: Strip international codes and apply regional formatting
+- **Export Shortening (FR-006)**: local numbers are shortened for the phonebook
+  (drop `+`/country/area code → leading `0`) at upload time
+- **Named Target Book**: the `target_book` is created/used by name via TR-064
+  (the main phonebook cannot be renamed, so a secondary book is used)
 - **vCard Image Processing**: Convert contact photos to FritzBox-compatible JPG format
 - **Mirror Sync**: Completely overwrite FritzBox address book (prune old contacts)
 - **Non-Interactive**: Designed for cron job execution
@@ -160,6 +164,15 @@ The utility uses INI format for configuration. Required sections:
 - `password`: FritzBox web interface password
 - `target_book`: Name of the address book to sync
 
+### Target Book Resolution
+
+The sync targets the address book whose name equals `target_book`, resolving it
+over TR-064 (port 49000) and creating it via `AddPhonebook` when it does not
+exist yet. This is required because the **main phonebook (0) can never be
+renamed** — it always keeps its stock name (e.g. "Telefoonboek"). Importing
+into a secondary book also applies the configured name on re-import. If TR-064
+is unreachable, the utility falls back to the main phonebook with a warning.
+
 ### Required Regional Configuration
 
 - `country_code`: Country code for normalization, e.g. `+49` (REQUIRED, FR-017)
@@ -178,6 +191,39 @@ Each source requires:
 - `username`: CardDAV username
 - `password`: CardDAV password
 - `priority`: Source priority (1 = highest, 2 = next, etc.)
+
+### Environment Variables (US2)
+
+Credentials can be supplied via environment variables instead of the config
+file. This keeps secrets out of `config.ini` and is the recommended approach
+for cron and CI/CD setups.
+
+| Variable | Overrides |
+|----------|-----------|
+| `FRITZBOX_USERNAME` | `[fritzbox] username` |
+| `FRITZBOX_PASSWORD` | `[fritzbox] password` |
+| `CARDDAV_<n>_USERNAME` | `[source_<n>] username` (n = source priority) |
+| `CARDDAV_<n>_PASSWORD` | `[source_<n>] password` (n = source priority) |
+
+Rules:
+
+- **Precedence**: an environment variable always overrides the matching config
+  file value.
+- **Empty environment variables are ignored**: an unset or empty variable
+  falls back to the config file value.
+- When a credential is provided via the environment it may be **omitted from
+  `config.ini` entirely**; validation then succeeds without prompting for
+  input.
+
+Example: validate a config that contains no credentials at all:
+
+```bash
+FRITZBOX_USERNAME=myuser \
+FRITZBOX_PASSWORD=secret \
+CARDDAV_1_USERNAME=nextcloud_user \
+CARDDAV_1_PASSWORD=nextcloud_pass \
+python3 src/main.py --config config.ini --validate-only
+```
 
 ## Usage Examples
 
