@@ -13,14 +13,19 @@ import tempfile
 import os
 
 from src.config.loader import (
-    SyncConfig, GeneralConfig, FritzBoxConfig, RegionalConfig,
-    CardDAVSourceConfig, load_config
+    SyncConfig,
+    GeneralConfig,
+    FritzBoxConfig,
+    RegionalConfig,
+    CardDAVSourceConfig,
+    load_config,
 )
 from src.models.contact import Contact, PhoneNumber, EmailAddress
 from src.services.carddav_fetcher import CardDAVFetcher
 from src.services.converter import (
-    PhoneNumberNormalizer, ImageConverter,
-    validate_and_normalize_contact
+    PhoneNumberNormalizer,
+    ImageConverter,
+    validate_and_normalize_contact,
 )
 from src.services.fritzbox_uploader import FritzBoxUploader
 from src.utils.logger import setup_logger
@@ -37,6 +42,7 @@ class TestSyncWorkflow:
     def teardown_method(self):
         """Clean up test fixtures."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_complete_sync_workflow_with_mock_data(self):
@@ -48,22 +54,19 @@ class TestSyncWorkflow:
                 url="https://fritz.box",
                 username="test_user",
                 password="test_password",
-                target_book="CardDAV Sync"
+                target_book="CardDAV Sync",
             ),
             regional=RegionalConfig(
-                country="DE",
-                region="DE",
-                country_code="+49",
-                area_code="30"
+                country="DE", region="DE", country_code="+49", area_code="30"
             ),
             sources=[
                 CardDAVSourceConfig(
                     url="https://nextcloud.example.com",
                     username="user1",
                     password="pass1",
-                    priority=1
+                    priority=1,
                 )
-            ]
+            ],
         )
 
         # Create mock contacts
@@ -72,30 +75,28 @@ class TestSyncWorkflow:
                 name="John Doe",
                 phone_numbers=[
                     PhoneNumber(number="+1234567890", type="home", prio=1),
-                    PhoneNumber(number="+442071234567", type="mobile", prio=0)
+                    PhoneNumber(number="+442071234567", type="mobile", prio=0),
                 ],
                 emails=[
                     EmailAddress(email="john@example.com", classifier="private"),
-                    EmailAddress(email="john@work.com", classifier="work")
+                    EmailAddress(email="john@work.com", classifier="work"),
                 ],
-                is_vip=False
+                is_vip=False,
             ),
             Contact(
                 name="Jane Smith",
                 phone_numbers=[
                     PhoneNumber(number="+15551234567", type="mobile", prio=1)
                 ],
-                emails=[
-                    EmailAddress(email="jane@example.com", classifier="private")
-                ],
-                is_vip=True
-            )
+                emails=[EmailAddress(email="jane@example.com", classifier="private")],
+                is_vip=True,
+            ),
         ]
 
         # Mock services
-        with patch.object(CardDAVFetcher, 'fetch_and_parse_contacts') as mock_fetch:
-            with patch.object(FritzBoxUploader, 'test_connection') as mock_test:
-                with patch.object(FritzBoxUploader, 'upload_phonebook') as mock_upload:
+        with patch.object(CardDAVFetcher, "fetch_and_parse_contacts") as mock_fetch:
+            with patch.object(FritzBoxUploader, "test_connection") as mock_test:
+                with patch.object(FritzBoxUploader, "upload_phonebook") as mock_upload:
                     # Setup mock returns
                     mock_fetch.return_value = contacts
                     mock_test.return_value = True
@@ -114,7 +115,9 @@ class TestSyncWorkflow:
                     assert uploader.test_connection() is True
 
                     # Upload contacts
-                    result = uploader.upload_phonebook(fetched_contacts, "CardDAV Sync", 0)
+                    result = uploader.upload_phonebook(
+                        fetched_contacts, "CardDAV Sync", 0
+                    )
                     assert result is True
 
                     # Verify mocks were called
@@ -127,17 +130,12 @@ class TestSyncWorkflow:
         config = SyncConfig(
             general=GeneralConfig(name_order="first_name_first"),
             fritzbox=FritzBoxConfig(
-                url="https://fritz.box",
-                username="test",
-                password="test"
+                url="https://fritz.box", username="test", password="test"
             ),
             regional=RegionalConfig(
-                country="US",
-                region="CA",
-                country_code="+1",
-                area_code="650"
+                country="US", region="CA", country_code="+1", area_code="650"
             ),
-            sources=[]
+            sources=[],
         )
 
         # Create contact with various phone number formats
@@ -146,42 +144,37 @@ class TestSyncWorkflow:
             phone_numbers=[
                 PhoneNumber(number="(415) 555-2671", type="home", prio=1),
                 PhoneNumber(number="+44 20 7946 0958", type="work", prio=0),
-                PhoneNumber(number="650-123-4567", type="mobile", prio=0)
-            ]
+                PhoneNumber(number="6501234567", type="mobile", prio=0),
+            ],
         )
 
-        # Normalize the contact
+        # Normalize the contact (canonical form, FR-005)
         normalizer = PhoneNumberNormalizer(
             config.regional.country_code, config.regional.area_code
         )
         normalized = validate_and_normalize_contact(contact, normalizer)
 
-        # Verify normalization
+        # Verify normalization to canonical form
         assert len(normalized.phone_numbers) == 3
-        assert normalized.phone_numbers[0].number == "+14155552671"
+        assert normalized.phone_numbers[0].number == "+16504155552671"
         assert normalized.phone_numbers[1].number == "+442079460958"
-        assert normalized.phone_numbers[2].number == "+16501234567"
+        assert normalized.phone_numbers[2].number == "+16506501234567"
 
     def test_sync_error_handling_connection_failure(self):
         """Test sync error handling when FritzBox connection fails."""
         config = SyncConfig(
             general=GeneralConfig(name_order="first_name_first"),
             fritzbox=FritzBoxConfig(
-                url="https://fritz.box",
-                username="test",
-                password="test"
+                url="https://fritz.box", username="test", password="test"
             ),
             regional=RegionalConfig(
-                country="DE",
-                region="DE",
-                country_code="+49",
-                area_code="30"
+                country="DE", region="DE", country_code="+49", area_code="30"
             ),
-            sources=[]
+            sources=[],
         )
 
         # Mock uploader with failing connection
-        with patch.object(FritzBoxUploader, 'test_connection', return_value=False):
+        with patch.object(FritzBoxUploader, "test_connection", return_value=False):
             uploader = FritzBoxUploader(config.fritzbox, self.logger)
             result = uploader.test_connection()
             assert result is False
@@ -191,17 +184,12 @@ class TestSyncWorkflow:
         config = SyncConfig(
             general=GeneralConfig(name_order="first_name_first"),
             fritzbox=FritzBoxConfig(
-                url="https://fritz.box",
-                username="test",
-                password="test"
+                url="https://fritz.box", username="test", password="test"
             ),
             regional=RegionalConfig(
-                country="DE",
-                region="DE",
-                country_code="+49",
-                area_code="30"
+                country="DE", region="DE", country_code="+49", area_code="30"
             ),
-            sources=[]
+            sources=[],
         )
 
         # Create contact with photo
@@ -209,15 +197,17 @@ class TestSyncWorkflow:
             name="Photo User",
             phone_numbers=[],
             picture_data=b"test_image_data",
-            picture_url=None
+            picture_url=None,
         )
 
         # Mock image converter
-        with patch.object(ImageConverter, 'convert_vcard_photo') as mock_convert:
+        with patch.object(ImageConverter, "convert_vcard_photo") as mock_convert:
             mock_convert.return_value = (b"converted_jpg_data", None)
 
             converter = ImageConverter(self.logger)
-            result = converter.convert_vcard_photo(contact.picture_data, photo_type='base64')
+            result = converter.convert_vcard_photo(
+                contact.picture_data, photo_type="base64"
+            )
 
             assert result[0] == b"converted_jpg_data"
 
@@ -232,7 +222,7 @@ name_order = first_name_first
 """
 
         config_path = os.path.join(self.temp_dir, "invalid_config.ini")
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             f.write(invalid_config_content)
 
         try:
@@ -249,15 +239,12 @@ name_order = first_name_first
                 url="https://fritz.box",
                 username="test",
                 password="test",
-                target_book="Test Phonebook"
+                target_book="Test Phonebook",
             ),
             regional=RegionalConfig(
-                country="DE",
-                region="DE",
-                country_code="+49",
-                area_code="30"
+                country="DE", region="DE", country_code="+49", area_code="30"
             ),
-            sources=[]
+            sources=[],
         )
 
         # Create test contacts
@@ -266,26 +253,28 @@ name_order = first_name_first
                 name="John Doe",
                 phone_numbers=[
                     PhoneNumber(number="+4930123456", type="home", prio=1),
-                    PhoneNumber(number="+491234567890", type="mobile", prio=0)
+                    PhoneNumber(number="+491234567890", type="mobile", prio=0),
                 ],
                 emails=[
                     EmailAddress(email="john@example.com", classifier="private"),
-                    EmailAddress(email="john@work.com", classifier="work")
+                    EmailAddress(email="john@work.com", classifier="work"),
                 ],
-                is_vip=True
+                is_vip=True,
             )
         ]
 
         # Create uploader and generate XML
         uploader = FritzBoxUploader(config.fritzbox, self.logger)
 
-        with patch.object(uploader, 'authenticate', return_value=True):
-            with patch.object(uploader, '_upload_to_fritzbox', return_value=True):
+        with patch.object(uploader, "authenticate", return_value=True):
+            with patch.object(uploader, "_upload_to_fritzbox", return_value=True):
                 # Test authentication
                 assert uploader.authenticate() is True
 
                 # Generate XML
-                xml_content = uploader._generate_phonebook_xml(contacts, "Test Phonebook")
+                xml_content = uploader._generate_phonebook_xml(
+                    contacts, "Test Phonebook"
+                )
 
                 # Basic validation
                 assert isinstance(xml_content, str)
@@ -302,17 +291,12 @@ name_order = first_name_first
         config = SyncConfig(
             general=GeneralConfig(name_order="first_name_first"),
             fritzbox=FritzBoxConfig(
-                url="https://fritz.box",
-                username="test",
-                password="test"
+                url="https://fritz.box", username="test", password="test"
             ),
             regional=RegionalConfig(
-                country="DE",
-                region="DE",
-                country_code="+49",
-                area_code="30"
+                country="DE", region="DE", country_code="+49", area_code="30"
             ),
-            sources=[]
+            sources=[],
         )
 
         fetcher = CardDAVFetcher(config, self.logger)
@@ -321,13 +305,13 @@ name_order = first_name_first
         contact1 = Contact(
             name="John Doe",
             phone_numbers=[PhoneNumber(number="+4930123456", type="home", prio=1)],
-            emails=[EmailAddress(email="john@example.com", classifier="private")]
+            emails=[EmailAddress(email="john@example.com", classifier="private")],
         )
 
         contact2 = Contact(
             name="John Doe",
             phone_numbers=[PhoneNumber(number="+4930123456", type="home", prio=1)],
-            emails=[EmailAddress(email="john@example.com", classifier="private")]
+            emails=[EmailAddress(email="john@example.com", classifier="private")],
         )
 
         # Test duplicate detection

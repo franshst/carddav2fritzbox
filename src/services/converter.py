@@ -11,66 +11,91 @@ Key features:
 
 import base64
 import re
+import sys
 from typing import Optional, Tuple, Union
 from io import BytesIO
 from PIL import Image
-from src.models.contact import PhoneNumber, Contact
+from src.models.contact import PhoneNumber, Contact, canonicalize_phone
 
 
 class PhoneNumberNormalizer:
-    """Handles phone number normalization and formatting for FritzBox compatibility.
+    """Handles phone number normalization and FritzBox shortening.
 
-    The normalizer performs the following operations:
-    1. Strips all non-numeric characters (preserving leading '+' for country codes)
-    2. Applies regional formatting based on FritzBox configuration
-    3. Validates phone number format for FritzBox constraints
+    Implements the three-stage model (spec.md data-model.md):
+    - *Normalize* (FR-005): sanitize (FR-014) then convert to the canonical
+      form (``+`` country code + number) via :func:`canonicalize_phone`.
+    - *Shorten* (FR-006): at FritzBox export, local numbers (book's configured
+      country code) lose the ``+`` and country code, gain a leading ``0``, and
+      drop the area code when it equals the configured area code; numbers from
+      other countries are kept in canonical form.
     """
 
-    def __init__(self, country_code: str = "+49", region_code: str = "30"):
+    def __init__(
+        self,
+        country_code: str = "",
+        area_code: str = "",
+        international_access_code: str = "",
+    ):
         """Initialize the phone number normalizer.
 
         Args:
-            country_code: Country code for phone number formatting (e.g., "+49")
-            region_code: Region code for phone number formatting (e.g., "30")
+            country_code: Country code for normalization (e.g. "+49").
+            area_code: Area code for normalization (e.g. "30").
+            international_access_code: International access code (e.g. "00").
         """
         self.country_code = country_code
-        self.region_code = region_code
+        self.area_code = area_code
+        self.international_access_code = international_access_code
+
+    def sanitize(self, phone_number: str) -> str:
+        """Sanitize a phone number (FR-014): strip all non-numeric characters
+        while preserving a leading '+' for country/international detection.
+        """
+        return re.sub(r"[^0-9+]", "", phone_number or "")
 
     def normalize(self, phone_number: str) -> str:
-        """Normalize a phone number by stripping all non-numeric characters.
+        """Normalize a phone number to the canonical form (FR-005).
 
-        Args:
-            phone_number: Raw phone number string (e.g., "+1 (415) 555-2671")
-
-        Returns:
-            Normalized phone number with only digits and leading '+'
+        Returns an empty string when the number cannot be normalized (no digits
+        remain after sanitization) - see FR-019.
         """
-        # Strip all non-numeric characters except leading '+'
-        normalized = re.sub(r'[^0-9+]', '', phone_number)
+        digits = self.sanitize(phone_number)
+        if not digits:
+            return ""
+        return canonicalize_phone(
+            digits,
+            self.country_code,
+            self.area_code,
+            self.international_access_code,
+        )
 
-        # Add country code if missing and number appears to be local
-        # Simple heuristic: if starts with digit (not '+'), add country code
-        if normalized and not normalized.startswith('+') and len(normalized) >= 7:
-            normalized = f"{self.country_code}{normalized}"
+    def shorten(self, phone_number: str) -> str:
+        """Shorten a canonical phone number for the FritzBox book (FR-006).
 
-        return normalized
+        Foreign-country numbers are kept in canonical form. Local numbers lose
+        the ``+`` and country code, gain a leading ``0``, and drop the area
+        code when it equals the configured area code.
+        """
+        digits = self.sanitize(phone_number)
+        if not digits.startswith("+"):
+            return digits
+
+        country_digits = re.sub(r"[^0-9]", "", self.country_code)
+        if not country_digits or not digits.startswith("+" + country_digits):
+            return digits
+
+        national = digits[len(country_digits) + 1 :]
+        area_digits = re.sub(r"[^0-9]", "", self.area_code).lstrip("0")
+        if area_digits and national.startswith(area_digits):
+            national = national[len(area_digits) :]
+        return "0" + national
 
     def format_for_fritzbox(self, phone_number: str) -> str:
-        """Format phone number for FritzBox XML export.
+        """Format a phone number for FritzBox XML export (FR-006).
 
-        Args:
-            phone_number: Normalized phone number
-
-        Returns:
-            Phone number formatted for FritzBox
+        This is the export-time shortening step of the three-stage model.
         """
-        # Ensure primary number has proper prefix if missing
-        if phone_number and not phone_number.startswith('+'):
-            # Add country code for international numbers based on regional config
-            if self.region_code != "30":  # Non-German region
-                phone_number = f"{self.country_code}{phone_number}"
-
-        return phone_number
+        return self.shorten(phone_number)
 
     def validate_fritzbox_format(self, phone_number: str) -> bool:
         """Validate phone number meets FritzBox requirements.
@@ -86,7 +111,7 @@ class PhoneNumberNormalizer:
 
         # FritzBox supports up to 9 phone numbers per contact (id="0" to "8")
         # Validate basic format
-        if phone_number.startswith('+'):
+        if phone_number.startswith("+"):
             # International format: country code + national number
             # Must be at least 8 digits after country code
             digits = phone_number[1:]  # Remove '+'
@@ -98,7 +123,7 @@ class PhoneNumberNormalizer:
                 return False
 
         # Allow digits only (already normalized)
-        return phone_number.replace('+', '').isdigit()
+        return phone_number.replace("+", "").isdigit()
 
 
 class ImageConverter:
@@ -123,8 +148,9 @@ class ImageConverter:
         """
         self.logger = logger
 
-    def convert_vcard_photo(self, photo_data: Union[str, bytes], 
-                           photo_type: Optional[str] = None) -> Tuple[Optional[bytes], Optional[str]]:
+    def convert_vcard_photo(
+        self, photo_data: Union[str, bytes], photo_type: Optional[str] = None
+    ) -> Tuple[Optional[bytes], Optional[str]]:
         """Convert vCard PHOTO data to FritzBox-compatible JPG format.
 
         Args:
@@ -139,7 +165,7 @@ class ImageConverter:
             # Handle different input formats
             if isinstance(photo_data, str):
                 # Determine if it's Base64 encoded or raw binary
-                if photo_type == 'uri' or photo_data.startswith('http'):
+                if photo_type == "uri" or photo_data.startswith("http"):
                     # External URI - return as-is (can't download automatically)
                     return None, photo_data
 
@@ -149,7 +175,7 @@ class ImageConverter:
                     is_base64 = True
                 except base64.binascii.Error:
                     # If Base64 decode fails, treat as raw bytes
-                    image_bytes = photo_data.encode('utf-8')
+                    image_bytes = photo_data.encode("utf-8")
                     is_base64 = False
             else:
                 # Raw bytes
@@ -163,7 +189,9 @@ class ImageConverter:
             self._log_warning(f"Failed to convert vCard photo: {e}")
             return None, None
 
-    def _convert_image_bytes_to_jpg(self, image_bytes: bytes, is_base64: bool) -> Tuple[Optional[bytes], Optional[str]]:
+    def _convert_image_bytes_to_jpg(
+        self, image_bytes: bytes, is_base64: bool
+    ) -> Tuple[Optional[bytes], Optional[str]]:
         """Convert image bytes to FritzBox-compatible JPG format.
 
         Args:
@@ -253,7 +281,9 @@ class ImageConverter:
             print(f"Warning: {message}")
 
 
-def extract_phone_number_info(phone: str, phone_type: str = "home", prio: int = 0) -> PhoneNumber:
+def extract_phone_number_info(
+    phone: str, phone_type: str = "home", prio: int = 0
+) -> PhoneNumber:
     """Create a PhoneNumber object with normalization applied.
 
     Args:
@@ -269,15 +299,13 @@ def extract_phone_number_info(phone: str, phone_type: str = "home", prio: int = 
     formatted_number = normalizer.format_for_fritzbox(normalized_number)
 
     return PhoneNumber(
-        number=formatted_number,
-        type=phone_type,
-        prio=prio,
-        quickdial="",
-        vanity=""
+        number=formatted_number, type=phone_type, prio=prio, quickdial="", vanity=""
     )
 
 
-def process_contact_photos(contact: Contact, image_converter: ImageConverter) -> Contact:
+def process_contact_photos(
+    contact: Contact, image_converter: ImageConverter
+) -> Contact:
     """Process and convert contact photos to FritzBox-compatible format.
 
     Args:
@@ -290,7 +318,7 @@ def process_contact_photos(contact: Contact, image_converter: ImageConverter) ->
     if contact.picture_data:
         # Convert Base64 photo data to FritzBox-compatible JPG
         jpg_data, _ = image_converter.convert_vcard_photo(
-            contact.picture_data, photo_type='base64'
+            contact.picture_data, photo_type="base64"
         )
         if jpg_data:
             contact.picture_data = jpg_data
@@ -302,28 +330,41 @@ def process_contact_photos(contact: Contact, image_converter: ImageConverter) ->
         # For external URLs, attempt to convert if possible
         # Note: In production, this would require downloading the image
         # For now, keep as URL if it's a valid format
-        if not (contact.picture_url.startswith('http://') or contact.picture_url.startswith('https://')):
+        if not (
+            contact.picture_url.startswith("http://")
+            or contact.picture_url.startswith("https://")
+        ):
             # Try to decode as Base64 if it's in data URL format
-            if ',' in contact.picture_url:
-                header, data = contact.picture_url.split(',', 1)
-                if 'base64' in header:
+            if "," in contact.picture_url:
+                header, data = contact.picture_url.split(",", 1)
+                if "base64" in header:
                     try:
-                        jpg_data, _ = image_converter.convert_vcard_photo(data, photo_type='base64')
+                        jpg_data, _ = image_converter.convert_vcard_photo(
+                            data, photo_type="base64"
+                        )
                         if jpg_data:
                             contact.picture_data = jpg_data
                         contact.picture_url = None
-                    except:
+                    except Exception:
                         pass
 
     return contact
 
 
-def validate_and_normalize_contact(contact: Contact, normalizer: Optional[PhoneNumberNormalizer] = None) -> Contact:
-    """Validate contact data and apply necessary normalizations.
+def validate_and_normalize_contact(
+    contact: Contact, normalizer: Optional[PhoneNumberNormalizer] = None
+) -> Contact:
+    """Validate contact data and normalize phone numbers to the canonical form.
+
+    Implements the *Normalize* stage of the three-stage model: each phone number
+    is sanitized (FR-014) and converted to the canonical form (FR-005). Numbers
+    that cannot be normalized are skipped with a warning to stderr (FR-019).
+    Shortening for FritzBox happens later, at export time (FR-006).
 
     Args:
         contact: Contact object to validate and normalize
-        normalizer: Optional PhoneNumberNormalizer object for custom regional configuration
+        normalizer: Optional PhoneNumberNormalizer object for custom regional
+            configuration
 
     Returns:
         Validated and normalized Contact object
@@ -339,25 +380,33 @@ def validate_and_normalize_contact(contact: Contact, normalizer: Optional[PhoneN
         picture_data=contact.picture_data,
         picture_url=contact.picture_url,
         is_vip=contact.is_vip,
-        unique_id=contact.unique_id
+        unique_id=contact.unique_id,
     )
 
     # Process each phone number
     for phone_number in contact.phone_numbers:
         normalized_str = normalizer.normalize(phone_number.number)
-        formatted_str = normalizer.format_for_fritzbox(normalized_str)
-        if normalizer.validate_fritzbox_format(formatted_str):
-            normalized_phone = PhoneNumber(
-                number=formatted_str,
-                type=phone_number.type,
-                prio=phone_number.prio,
-                quickdial=phone_number.quickdial,
-                vanity=phone_number.vanity
+        if not normalized_str:
+            print(
+                f"Warning: Skipping unnormalizable phone number: "
+                f"{phone_number.number!r}",
+                file=sys.stderr,
             )
-            validated_contact.phone_numbers.append(normalized_phone)
-        else:
-            # Log warning for invalid phone numbers
-            print(f"Warning: Invalid phone number format: {phone_number.number}")
+            continue
+        if not normalizer.validate_fritzbox_format(normalized_str):
+            print(
+                f"Warning: Invalid phone number for FritzBox: {normalized_str}",
+                file=sys.stderr,
+            )
+            continue
+        normalized_phone = PhoneNumber(
+            number=normalized_str,
+            type=phone_number.type,
+            prio=phone_number.prio,
+            quickdial=phone_number.quickdial,
+            vanity=phone_number.vanity,
+        )
+        validated_contact.phone_numbers.append(normalized_phone)
 
     # Add emails (no normalization needed for FritzBox)
     validated_contact.emails = contact.emails.copy()
@@ -368,22 +417,22 @@ def validate_and_normalize_contact(contact: Contact, normalizer: Optional[PhoneN
 if __name__ == "__main__":
     # Example usage
     print("Phone Number Normalizer Example:")
-    normalizer = PhoneNumberNormalizer("+49", "30")
+    normalizer = PhoneNumberNormalizer("+49", "30", "00")
 
     test_numbers = [
         "+1 (415) 555-2671",
-        "44 20 7946 0958",
+        "0049 30 123456",
         "030-1234567",
-        "+49 30 123456"
+        "0151-2345678",
     ]
 
     for number in test_numbers:
         normalized = normalizer.normalize(number)
-        formatted = normalizer.format_for_fritzbox(normalized)
+        shortened = normalizer.shorten(normalized)
         print(f"Original: {number}")
-        print(f"Normalized: {normalized}")
-        print(f"Formatted: {formatted}")
-        print(f"Valid: {normalizer.validate_fritzbox_format(formatted)}")
+        print(f"Canonical: {normalized}")
+        print(f"Shortened: {shortened}")
+        print(f"Valid: {normalizer.validate_fritzbox_format(normalized)}")
         print()
 
     print("Image Converter Example:")

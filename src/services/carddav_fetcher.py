@@ -13,13 +13,20 @@ Key features:
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+import xml.etree.ElementTree as ET
+from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
+import requests
+import vobject
 from vobject import vCard
 
 from src.config.loader import SyncConfig
-from src.models.contact import Contact, PhoneNumber, EmailAddress, PhoneNumber, EmailAddress
+from src.models.contact import Contact, PhoneNumber, EmailAddress
+
+_DAV_NS = "DAV:"
+_CARDDAV_NS = "urn:ietf:params:xml:ns:carddav"
+_TIMEOUT = 30
 
 
 class CardDAVFetcher:
@@ -39,18 +46,19 @@ class CardDAVFetcher:
     def __init__(self, config: SyncConfig, logger: logging.Logger):
         self.config = config
         self.logger = logger
+        self.timeout = _TIMEOUT
         self.supported_contact_properties = self._get_supported_contact_properties()
 
     def _get_supported_contact_properties(self) -> set:
         """Get set of supported vCard properties for mapping."""
         return {
-            'fn',      # Formatted Name
-            'n',       # Structured Name
-            'tel',     # Telephone number
-            'email',   # Email address
-            'photo',   # Photo/image
-            'categories',  # Contact categories (VIP, etc.)
-            'uid',     # Unique ID
+            "fn",  # Formatted Name
+            "n",  # Structured Name
+            "tel",  # Telephone number
+            "email",  # Email address
+            "photo",  # Photo/image
+            "categories",  # Contact categories (VIP, etc.)
+            "uid",  # Unique ID
         }
 
     def fetch_all_contacts(self) -> List[Dict[str, Any]]:
@@ -71,7 +79,7 @@ class CardDAVFetcher:
         for source_config in self.config.sorted_sources:
             try:
                 self.logger.info(
-                    f"Fetching contacts from source {source_config.priority}: {source_config.url}"
+                    f"Fetching source {source_config.priority} ({source_config.url})"
                 )
 
                 source_contacts = self._fetch_source_contacts(source_config)
@@ -79,12 +87,13 @@ class CardDAVFetcher:
                 total_fetched += len(source_contacts)
 
                 self.logger.info(
-                    f"Fetched {len(source_contacts)} contacts from source {source_config.priority}"
+                    f"Fetched {len(source_contacts)} contacts "
+                    f"(source {source_config.priority})"
                 )
 
             except Exception as e:
                 self.logger.error(
-                    f"Failed to fetch contacts from source {source_config.priority} ({source_config.url}): {e}"
+                    f"Source {source_config.priority} ({source_config.url}) failed: {e}"
                 )
                 # Continue with other sources even if one fails
 
@@ -92,128 +101,226 @@ class CardDAVFetcher:
         return all_contacts
 
     def _fetch_source_contacts(self, source_config) -> List[Dict[str, Any]]:
-        """Fetch contacts from a single CardDAV source.
+        """Fetch contacts from a single CardDAV source over RFC 6352.
+
+        Flow (see contracts/carddav-api.md):
+        1. Resolve the address-book home set via ``.well-known/carddav``
+           (RFC 6764), falling back to a PROPFIND on the configured URL.
+        2. PROPFIND the home set and collect hrefs whose ``resourcetype``
+           contains a CardDAV ``addressbook`` resource.
+        3. REPORT each address book with an ``addressbook-query`` asking for
+           ``address-data`` and parse the returned vCards with ``vobject``.
 
         Args:
             source_config: CardDAV source configuration
 
         Returns:
-            List of contact dictionaries with raw vCard data
+            List of ``{"url", "data", "source_priority"}`` dicts with raw
+            vCard data.
 
         Raises:
-            Exception: If source connection or fetching fails
+            ConnectionError: If the source is unreachable or a DAV request fails.
         """
-        # This is a mock implementation since actual CardDAV client
-        # would require specific authentication and API calls
-        # In a real implementation, you would use:
-        # - caldav library with proper authentication
-        # - requests library for HTTP API calls
-        # - Proper error handling and retry logic
+        session = self._session_for(source_config)
 
-        # Mock implementation that returns sample vCard data
-        mock_contacts = self._get_mock_carddav_contacts()
+        try:
+            addressbooks = self._discover_addressbooks(session, source_config)
+        except requests.RequestException as e:
+            raise ConnectionError(
+                f"CardDAV request failed for source {source_config.priority} "
+                f"({source_config.url}): {e}"
+            ) from e
+
+        if not addressbooks:
+            self.logger.warning(
+                f"No CardDAV address books found at source {source_config.priority} "
+                f"({source_config.url})"
+            )
+            return []
+
+        raw_contacts = []
+        for addressbook_url in addressbooks:
+            self.logger.debug(f"Fetching vCards from address book {addressbook_url}")
+            try:
+                raw_contacts.extend(self._report_addressbook(session, addressbook_url))
+            except requests.RequestException as e:
+                raise ConnectionError(
+                    f"Failed to fetch address book {addressbook_url}: {e}"
+                ) from e
+
+        for raw_contact in raw_contacts:
+            raw_contact["source_priority"] = source_config.priority
 
         self.logger.info(
-            f"Mock: Returning {len(mock_contacts)} contacts from source {source_config.priority}"
+            f"Fetched {len(raw_contacts)} contacts from source {source_config.priority}"
         )
+        return raw_contacts
 
-        return mock_contacts
+    def _session_for(self, source_config) -> requests.Session:
+        """Create a requests session authenticated for a CardDAV source."""
+        session = requests.Session()
+        session.auth = (source_config.username, source_config.password)
+        session.headers.update({"User-Agent": "carddav2fritzbox/1.0"})
+        return session
 
-    def _get_mock_carddav_contacts(self) -> List[Dict[str, Any]]:
-        """Get mock CardDAV contacts for demonstration/testing.
+    def _discover_addressbooks(
+        self, session: requests.Session, source_config
+    ) -> List[str]:
+        """Resolve the address-book home set and list its address books.
 
-        Returns:
-            List of mock contact dictionaries with vCard data
+        Per RFC 6764 the well-known URI redirects to the home set; when that
+        fails (e.g. server without well-known support) fall back to a PROPFIND
+        on the configured source URL.
         """
-        # Mock contacts that represent typical CardDAV vCard data
-        mock_contacts = [
-            {
-                "url": "https://nextcloud.example.com/carddav/addressbooks/users/user1/contacts/vcard1.vcf",
-                "data": self._create_mock_vcard(
-                    name="John Doe",
-                    phones=["+1234567890", "+441234567890"],
-                    emails=["john@example.com", "john.doe@work.com"],
-                    categories=["VIP"],
-                    uid="12345@example.com"
+        base = source_config.url
+        well_known = urljoin(base, "/.well-known/carddav")
+        home_set = None
+
+        try:
+            response = session.get(
+                well_known, timeout=self.timeout, allow_redirects=True
+            )
+            response.raise_for_status()
+            # Only use the final URL if a redirect actually occurred.
+            home_set = response.url if response.history else base
+        except requests.RequestException as e:
+            self.logger.warning(
+                f".well-known/carddav lookup failed for {base}: {e}; "
+                f"falling back to PROPFIND on the configured URL"
+            )
+
+        if not home_set:
+            home_set = base
+
+        return self._propfind_addressbooks(session, home_set)
+
+    def _propfind_addressbooks(self, session: requests.Session, url: str) -> List[str]:
+        """PROPFIND a URL and collect hrefs that are CardDAV address books."""
+        body = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            f'<d:propfind xmlns:d="{_DAV_NS}">'
+            "<d:prop><d:resourcetype/><d:displayname/></d:prop>"
+            "</d:propfind>"
+        )
+        headers = {
+            "Depth": "1",
+            "Content-Type": "application/xml; charset=utf-8",
+            "Accept": "application/xml, text/xml",
+        }
+        response = session.request(
+            "PROPFIND", url, data=body, headers=headers, timeout=self.timeout
+        )
+        response.raise_for_status()
+
+        root = ET.fromstring(response.content)
+        addressbooks = []
+        for response_node in root.findall(f"{{{_DAV_NS}}}response"):
+            href_el = response_node.find(f"{{{_DAV_NS}}}href")
+            if href_el is None or not href_el.text:
+                continue
+            if self._is_addressbook(response_node):
+                addressbooks.append(urljoin(url, href_el.text.strip()))
+        return addressbooks
+
+    def _is_addressbook(self, response_node: ET.Element) -> bool:
+        """Return True if a multistatus response node is a CardDAV address book."""
+        for propstat in response_node.findall(f"{{{_DAV_NS}}}propstat"):
+            resourcetype = propstat.find(f"{{{_DAV_NS}}}prop/{{{_DAV_NS}}}resourcetype")
+            if (
+                resourcetype is not None
+                and resourcetype.find(f"{{{_CARDDAV_NS}}}addressbook") is not None
+            ):
+                return True
+        return False
+
+    def _report_addressbook(
+        self, session: requests.Session, addressbook_url: str
+    ) -> List[Dict[str, Any]]:
+        """REPORT an addressbook-query asking for address-data and parse vCards."""
+        body = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            f'<card:addressbook-query xmlns:d="{_DAV_NS}" '
+            f'xmlns:card="{_CARDDAV_NS}">'
+            "<d:prop><d:getetag/><card:address-data/></d:prop>"
+            '<card:filter><card:prop-filter name="FN"/></card:filter>'
+            "</card:addressbook-query>"
+        )
+        headers = {
+            "Depth": "1",
+            "Content-Type": "application/xml; charset=utf-8",
+            "Accept": "text/vcard, application/xml",
+        }
+        response = session.request(
+            "REPORT", addressbook_url, data=body, headers=headers, timeout=self.timeout
+        )
+        response.raise_for_status()
+
+        content_type = response.headers.get("Content-Type", "")
+        if content_type.startswith("text/vcard") or content_type.startswith(
+            "text/x-vcard"
+        ):
+            return self._parse_vcards_text(response.text, addressbook_url)
+        return self._extract_vcards_from_multistatus(response.content, addressbook_url)
+
+    def _extract_vcards_from_multistatus(
+        self, content: bytes, addressbook_url: str
+    ) -> List[Dict[str, Any]]:
+        """Extract and parse ``address-data`` values from a multistatus response."""
+        root = ET.fromstring(content)
+        raw_contacts = []
+        for response_node in root.findall(f"{{{_DAV_NS}}}response"):
+            href_el = response_node.find(f"{{{_DAV_NS}}}href")
+            href = (
+                href_el.text.strip()
+                if href_el is not None and href_el.text
+                else addressbook_url
+            )
+            for propstat in response_node.findall(f"{{{_DAV_NS}}}propstat"):
+                address_data = propstat.find(
+                    f"{{{_DAV_NS}}}prop/{{{_CARDDAV_NS}}}address-data"
                 )
-            },
-            {
-                "url": "https://nextcloud.example.com/carddav/addressbooks/users/user1/contacts/vcard2.vcf",
-                "data": self._create_mock_vcard(
-                    name="Jane Smith",
-                    phones=["+442071234567"],
-                    emails=["jane@example.com"],
-                    categories=[],
-                    uid="67890@example.com"
-                )
-            },
-            {
-                "url": "https://caldav.example.com/addressbooks/users/user2/contacts/vcard3.vcf",
-                "data": self._create_mock_vcard(
-                    name="Mike Johnson",
-                    phones=["+15551234567"],
-                    emails=["mike@example.com"],
-                    categories=["VIP"],
-                    uid="11111@example.com"
-                )
-            },
-        ]
+                if address_data is not None and address_data.text:
+                    raw_contacts.extend(
+                        self._parse_vcards_text(address_data.text, href)
+                    )
+        return raw_contacts
 
-        return mock_contacts
+    def _parse_vcards_text(self, text: str, source_url: str) -> List[Dict[str, Any]]:
+        """Parse one or more vCards from a text body into raw contact dicts.
 
-    def _create_mock_vcard(
-        self,
-        name: str,
-        phones: List[str],
-        emails: List[str],
-        categories: List[str],
-        uid: str
-    ) -> vCard:
-        """Create a mock vCard for testing.
-
-        Args:
-            name: Contact name
-            phones: List of phone numbers
-            emails: List of email addresses
-            categories: Contact categories (e.g., VIP)
-            uid: Unique identifier
-
-        Returns:
-            vCard object with mock contact data
+        vCards are split on ``BEGIN:VCARD``/``END:VCARD`` boundaries so a
+        single malformed vCard is skipped without failing the run (FR-009).
         """
-        vcard = vCard()
+        raw_contacts = []
+        for card_text in self._split_vcards(text):
+            try:
+                vcard = vobject.readOne(card_text)
+            except Exception as e:
+                self.logger.warning(
+                    f"Skipping unparseable vCard from {source_url}: {e}"
+                )
+                continue
+            raw_contacts.append({"url": source_url, "data": vcard})
+        return raw_contacts
 
-        # Add formatted name (FN)
-        vcard.add('fn').value = name
-
-        # Add structured name (N)
-        name_parts = name.split(' ', 1)
-        if len(name_parts) == 2:
-            vcard.add('n').value = f"{name_parts[1]};{name_parts[0]}"
-        else:
-            vcard.add('n').value = f";{name}"
-
-        # Add phone numbers
-        for i, phone in enumerate(phones):
-            tel = vcard.add('tel')
-            tel.type_param = "home" if i == 0 else "work"
-            tel.value = phone
-
-        # Add email addresses
-        for i, email in enumerate(emails):
-            email_obj = vcard.add('email')
-            email_obj.type_param = "home" if i == 0 else "work"
-            email_obj.value = email
-
-        # Add categories (e.g., VIP)
-        for category in categories:
-            cat = vcard.add('categories')
-            cat.value = category
-
-        # Add unique ID
-        vcard.add('uid').value = uid
-
-        return vcard
+    @staticmethod
+    def _split_vcards(text: str) -> List[str]:
+        """Split a body of concatenated vCards into individual vCard texts."""
+        cards = []
+        current = None
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if line.upper().startswith("BEGIN:VCARD"):
+                current = [line]
+            elif current is not None:
+                current.append(line)
+                if line.upper().startswith("END:VCARD"):
+                    cards.append("\n".join(current))
+                    current = None
+        if current is not None:
+            # Unclosed block: attempt to parse it anyway.
+            cards.append("\n".join(current))
+        return cards
 
     def parse_vcard_to_contact(self, vcard: vCard, source_priority: int) -> Contact:
         """Parse vCard data into a Contact object.
@@ -257,7 +364,9 @@ class CardDAVFetcher:
             unique_id=unique_id,
         )
 
-        self.logger.debug(f"Parsed vCard for contact '{name}' from source priority {source_priority}")
+        self.logger.debug(
+            f"Parsed vCard for contact '{name}' from source priority {source_priority}"
+        )
         return contact
 
     def _extract_formatted_name(self, vcard: vCard) -> str:
@@ -270,24 +379,24 @@ class CardDAVFetcher:
             Formatted contact name string
         """
         # Try to get formatted name (FN) first
-        fn = vcard.get('fn')
-        if fn:
-            return fn.value
+        fn_list = vcard.contents.get("fn")
+        if fn_list and getattr(fn_list[0], "value", None):
+            return fn_list[0].value
 
         # Fall back to structured name (N)
-        n = vcard.get('n')
-        if n:
-            # N format: "Lastname;Firstname;Additional Names;Honorifics"
-            parts = n.value.split(';', 1)
-            if len(parts) >= 2 and parts[1]:
-                return parts[1]  # Firstname
-            else:
-                return parts[0]  # Fallback
+        n_list = vcard.contents.get("n")
+        if n_list:
+            n = n_list[0].value
+            given = getattr(n, "given", "") or ""
+            family = getattr(n, "family", "") or ""
+            if given and family:
+                return f"{given} {family}"
+            return given or family or "Unknown Contact"
 
         # Ultimate fallback: Use UID if available
-        uid = vcard.get('uid')
-        if uid:
-            return uid.value
+        uid_list = vcard.contents.get("uid")
+        if uid_list:
+            return uid_list[0].value
 
         return "Unknown Contact"
 
@@ -301,7 +410,7 @@ class CardDAVFetcher:
             List of PhoneNumber objects
         """
         phone_numbers = []
-        tel_properties = vcard.getAll('tel')
+        tel_properties = vcard.contents.get("tel") or []
 
         for i, tel in enumerate(tel_properties):
             # Extract phone number
@@ -334,16 +443,18 @@ class CardDAVFetcher:
             Phone type string ("home", "work", "mobile", "fax", or "home" default)
         """
         # Extract type parameter
-        type_param = getattr(tel, 'type_param', None)
-        if type_param:
-            return type_param.lower()
+        types = tel.params.get("TYPE", []) if hasattr(tel, "params") else []
+        for t in types:
+            t = t.lower()
+            if t in ("home", "work", "mobile", "cell", "fax", "pager"):
+                return "mobile" if t == "cell" else t
 
         # Try to infer from value
-        if tel.value.startswith('+'):
+        if tel.value.startswith("+"):
             return "mobile"
-        elif 'home' in str(tel).lower():
+        elif "home" in str(tel).lower():
             return "home"
-        elif 'work' in str(tel).lower():
+        elif "work" in str(tel).lower():
             return "work"
         else:
             return "home"  # Default
@@ -358,7 +469,7 @@ class CardDAVFetcher:
             List of EmailAddress objects
         """
         email_addresses = []
-        email_properties = vcard.getAll('email')
+        email_properties = vcard.contents.get("email") or []
 
         for i, email in enumerate(email_properties):
             # Extract email address
@@ -387,12 +498,12 @@ class CardDAVFetcher:
             Email classifier ("private" or "work")
         """
         # Extract type parameter
-        type_param = getattr(email, 'type_param', None)
-        if type_param:
-            return type_param.lower()
+        types = email.params.get("TYPE", []) if hasattr(email, "params") else []
+        if any(t.lower() in ("work", "office") for t in types):
+            return "work"
 
         # Try to infer from value
-        if 'work' in str(email).lower():
+        if "work" in str(email).lower():
             return "work"
         else:
             return "private"  # Default
@@ -406,27 +517,32 @@ class CardDAVFetcher:
         Returns:
             Tuple of (picture_data: Optional[bytes], picture_url: Optional[str])
         """
-        photo = vcard.get('photo')
-        if not photo:
+        photo_list = vcard.contents.get("photo")
+        if not photo_list:
             return None, None
 
         # Handle different photo formats
+        photo = photo_list[0]
         photo_value = photo.value
-        photo_type = getattr(photo, 'type_param', None)
+        params = photo.params if hasattr(photo, "params") else {}
+        value_types = [v.lower() for v in params.get("VALUE", [])]
 
-        if photo_type == 'uri':
+        if "uri" in value_types or (
+            isinstance(photo_value, str)
+            and photo_value.startswith(("http://", "https://", "ftp://"))
+        ):
             # Photo is a URL
             return None, photo_value
-        elif photo_type == 'base64' or 'base64' in str(photo).lower():
-            # Photo is base64 encoded
+
+        if isinstance(photo_value, bytes):
+            # vobject already decoded inline base64 data
+            return photo_value, None
+
+        if isinstance(photo_value, str):
             try:
                 import base64
-                # Decode base64 photo data
-                # Note: This is simplified - real implementation would handle
-                # proper base64 decoding and validation
-                if isinstance(photo_value, str):
-                    photo_bytes = base64.b64decode(photo_value)
-                    return photo_bytes, None
+
+                return base64.b64decode(photo_value), None
             except Exception as e:
                 self.logger.warning(f"Failed to decode base64 photo: {e}")
 
@@ -441,10 +557,14 @@ class CardDAVFetcher:
         Returns:
             True if contact is VIP, False otherwise
         """
-        categories = vcard.get('categories')
+        categories = vcard.contents.get("categories")
         if categories:
-            category_value = categories.value.lower()
-            return "vip" in category_value or "important" in category_value
+            values = categories[0].value
+            if isinstance(values, list):
+                lowered = [str(v).lower() for v in values]
+            else:
+                lowered = [str(values).lower()]
+            return any("vip" in value or "important" in value for value in lowered)
 
         return False
 
@@ -457,13 +577,14 @@ class CardDAVFetcher:
         Returns:
             Integer unique ID if available, None otherwise
         """
-        uid = vcard.get('uid')
-        if uid:
+        uid_list = vcard.contents.get("uid")
+        if uid_list:
             # Try to extract numeric ID from UID
-            uid_value = uid.value
+            uid_value = uid_list[0].value
             # Extract numbers from UID string
             import re
-            numbers = re.findall(r'\d+', uid_value)
+
+            numbers = re.findall(r"\d+", str(uid_value))
             if numbers:
                 try:
                     return int(numbers[0])
@@ -489,13 +610,18 @@ class CardDAVFetcher:
         for raw_contact in raw_contacts:
             vcard = raw_contact["data"]
 
-            # Determine source priority from URL
-            source_priority = self._extract_source_priority_from_url(raw_contact["url"])
+            # Prefer the configured source priority (FR-013); fall back to a
+            # URL heuristic for callers that do not provide one.
+            source_priority = raw_contact.get("source_priority") or (
+                self._extract_source_priority_from_url(raw_contact["url"])
+            )
 
             contact = self.parse_vcard_to_contact(vcard, source_priority)
             parsed_contacts.append(contact)
 
-        self.logger.info(f"Successfully parsed {len(parsed_contacts)} contacts from vCard data")
+        self.logger.info(
+            f"Successfully parsed {len(parsed_contacts)} contacts from vCard data"
+        )
         return parsed_contacts
 
     def _extract_source_priority_from_url(self, url: str) -> int:
@@ -525,20 +651,44 @@ class CardDAVFetcher:
     def test_connection(self, source_config) -> bool:
         """Test connection to a CardDAV source.
 
+        Performs a Depth-0 PROPFIND against the configured URL to verify the
+        endpoint is reachable and authentication succeeds.
+
         Args:
             source_config: CardDAV source configuration to test
 
         Returns:
-            True if connection test succeeds, False otherwise
+            True if the connection test succeeds, False otherwise
         """
         try:
-            # This would test actual CardDAV source connection
-            # For now, return True to indicate success
-            self.logger.info(f"Test connection successful for source: {source_config.url}")
+            session = self._session_for(source_config)
+            body = (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                f'<d:propfind xmlns:d="{_DAV_NS}">'
+                "<d:prop><d:resourcetype/></d:prop>"
+                "</d:propfind>"
+            )
+            headers = {
+                "Depth": "0",
+                "Content-Type": "application/xml; charset=utf-8",
+                "Accept": "application/xml, text/xml",
+            }
+            response = session.request(
+                "PROPFIND",
+                source_config.url,
+                data=body,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            self.logger.info(
+                f"Test connection successful for source: {source_config.url}"
+            )
             return True
-
-        except Exception as e:
-            self.logger.error(f"Test connection failed for source {source_config.url}: {e}")
+        except requests.RequestException as e:
+            self.logger.error(
+                f"Test connection failed for source {source_config.url}: {e}"
+            )
             return False
 
 
@@ -548,8 +698,11 @@ def example_usage():
 
     # Mock configuration for example
     from src.config.loader import (
-        SyncConfig, GeneralConfig, FritzBoxConfig, RegionalConfig,
-        CardDAVSourceConfig
+        SyncConfig,
+        GeneralConfig,
+        FritzBoxConfig,
+        RegionalConfig,
+        CardDAVSourceConfig,
     )
 
     config = SyncConfig(
@@ -558,32 +711,30 @@ def example_usage():
             url="https://fritz.box",
             username="test",
             password="test",
-            target_book="CardDAV Sync"
+            target_book="CardDAV Sync",
         ),
         regional=RegionalConfig(
-            country="DE",
-            region="DE",
-            country_code="+49",
-            area_code="30"
+            country="DE", region="DE", country_code="+49", area_code="30"
         ),
         sources=[
             CardDAVSourceConfig(
                 url="https://nextcloud.example.com",
                 username="user1",
                 password="pass1",
-                priority=1
+                priority=1,
             ),
             CardDAVSourceConfig(
                 url="https://caldav.example.com",
                 username="user2",
                 password="pass2",
-                priority=2
-            )
-        ]
+                priority=2,
+            ),
+        ],
     )
 
     # Setup logger
     import logging
+
     logger = logging.getLogger(__name__)
     logging.basicConfig(level=logging.INFO)
 

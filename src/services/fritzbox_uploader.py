@@ -4,14 +4,14 @@ This module provides functionality to upload contacts to a FritzBox device
 and manage authentication with the FritzBox HTTP API.
 
 Key features:
-- Challenge-response authentication using login_sid.lua
+- Challenge-response authentication using login_sid.lua (MD5 legacy path and
+  PBKDF2-HMAC-SHA256 for FRITZ!OS 7.24+, research.md section 2.1)
 - Multipart POST upload to /cgi-bin/firmwarecfg for mirror sync
 - XML document generation according to FritzBox schema
 - Comprehensive error handling and logging
 - Session management with automatic re-authentication
 """
 
-import base64
 import hashlib
 import logging
 import requests
@@ -19,7 +19,6 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
-from io import BytesIO
 from xml.dom import minidom
 
 from src.models.contact import Contact, PhoneNumber, EmailAddress
@@ -29,6 +28,7 @@ from src.config.loader import FritzBoxConfig
 @dataclass
 class FritzBoxAuthentication:
     """Authentication credentials for FritzBox connection."""
+
     username: str
     password: str
     host: str = "fritz.box"
@@ -37,6 +37,7 @@ class FritzBoxAuthentication:
 @dataclass
 class ContactXML:
     """Represents a single contact in FritzBox XML format."""
+
     name: str
     category: str = "0"
     image_url: Optional[str] = None
@@ -49,6 +50,7 @@ class ContactXML:
 @dataclass
 class PhonebookXML:
     """Represents a complete phonebook in FritzBox XML format."""
+
     name: str
     owner: str = "0"
     contacts: List[ContactXML] = field(default_factory=list)
@@ -58,7 +60,7 @@ class FritzBoxUploader:
     """Handles authentication and contact upload to FritzBox devices.
 
     The uploader supports:
-    1. Challenge-response authentication via login_sid.lua
+    1. Challenge-response authentication via login_sid.lua (MD5 and PBKDF2)
     2. Full phonebook overwrite via /cgi-bin/firmwarecfg (mirror sync)
     3. XML document generation according to FritzBox schema
     4. Automatic session management and re-authentication
@@ -88,9 +90,10 @@ class FritzBoxUploader:
             True if authentication succeeds, False otherwise
         """
         try:
-            url = f"http://{self.host}/login_sid.lua"
+            # Step 1: Get challenge (version=2 requests the PBKDF2 challenge on
+            # FRITZ!OS 7.24+; older firmware returns the legacy MD5 challenge)
+            url = f"http://{self.host}/login_sid.lua?version=2"
 
-            # Step 1: Get challenge
             response = requests.get(url, timeout=10)
             response.raise_for_status()
 
@@ -108,10 +111,7 @@ class FritzBoxUploader:
             challenge_response = self._calculate_challenge_response(challenge)
 
             # Step 3: Submit response
-            params = {
-                "username": self.config.username,
-                "response": challenge_response
-            }
+            params = {"username": self.config.username, "response": challenge_response}
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
 
@@ -119,9 +119,13 @@ class FritzBoxUploader:
             self.session_id = login_tree.findtext("SID")
 
             if self.session_id == "0000000000000000":
-                raise PermissionError("FritzBox authentication failed. Check credentials.")
+                raise PermissionError(
+                    "FritzBox authentication failed. Check credentials."
+                )
 
-            self.logger.info(f"Authentication successful, session ID: {self.session_id}")
+            self.logger.info(
+                f"Authentication successful, session ID: {self.session_id}"
+            )
             return True
 
         except Exception as e:
@@ -129,7 +133,27 @@ class FritzBoxUploader:
             return False
 
     def _calculate_challenge_response(self, challenge: str) -> str:
-        """Calculate MD5 challenge-response using UTF-16LE encoding.
+        """Calculate the challenge-response for a given FritzBox challenge.
+
+        Dispatches to the PBKDF2-HMAC-SHA256 scheme when the challenge carries
+        the ``2$`` prefix (FRITZ!OS 7.24+); otherwise falls back to the legacy
+        MD5 scheme (research.md section 2.1).
+
+        Args:
+            challenge: Challenge string from FritzBox
+
+        Returns:
+            Challenge-response string
+
+        Raises:
+            ValueError: On a malformed PBKDF2 challenge
+        """
+        if challenge.startswith("2$"):
+            return self._calculate_pbkdf2_response(challenge)
+        return self._calculate_md5_response(challenge)
+
+    def _calculate_md5_response(self, challenge: str) -> str:
+        """Calculate the legacy MD5 challenge-response using UTF-16LE encoding.
 
         Args:
             challenge: Challenge string from FritzBox
@@ -142,8 +166,43 @@ class FritzBoxUploader:
         md5_hash = hashlib.md5(hash_input).hexdigest()
         return f"{challenge}-{md5_hash}"
 
-    def upload_phonebook(self, contacts: List[Contact], phonebook_name: str,
-                        phonebook_id: int = 0) -> bool:
+    def _calculate_pbkdf2_response(self, challenge: str) -> str:
+        """Calculate the PBKDF2-HMAC-SHA256 challenge-response (FRITZ!OS 7.24+).
+
+        Challenge format: ``2$<iter1>$<salt1>$<iter2>$<salt2>`` with hex
+        encoded salts. The password is hashed against the static salt, then the
+        raw (non-stringified) hash is hashed again against the dynamic salt.
+        Response format: ``<salt2>$<hash2_hex>`` (AVM session ID spec).
+
+        Args:
+            challenge: PBKDF2 challenge string (prefix ``2$``)
+
+        Returns:
+            Challenge-response string in format "<salt2>$<hash2>"
+
+        Raises:
+            ValueError: On a malformed PBKDF2 challenge
+        """
+        parts = challenge.split("$")
+        if len(parts) != 5:
+            raise ValueError(
+                f"Malformed PBKDF2 challenge (expected "
+                f"'2$<iter1>$<salt1>$<iter2>$<salt2>'): {challenge!r}"
+            )
+        iterations_1 = int(parts[1])
+        salt_1 = bytes.fromhex(parts[2])
+        iterations_2 = int(parts[3])
+        salt_2 = bytes.fromhex(parts[4])
+
+        hash_1 = hashlib.pbkdf2_hmac(
+            "sha256", self.config.password.encode(), salt_1, iterations_1
+        )
+        hash_2 = hashlib.pbkdf2_hmac("sha256", hash_1, salt_2, iterations_2)
+        return f"{parts[4]}${hash_2.hex()}"
+
+    def upload_phonebook(
+        self, contacts: List[Contact], phonebook_name: str, phonebook_id: int = 0
+    ) -> bool:
         """Upload contacts to FritzBox using mirror sync (overwrite).
 
         This method implements FR-011 and FR-012: mirror sync with complete overwrite.
@@ -165,10 +224,14 @@ class FritzBoxUploader:
             phonebook_xml = self._generate_phonebook_xml(contacts, phonebook_name)
 
             # Upload via multipart/form-data
-            success = self._upload_to_fritzbox(phonebook_xml, phonebook_name, phonebook_id)
+            success = self._upload_to_fritzbox(
+                phonebook_xml, phonebook_name, phonebook_id
+            )
 
             if success:
-                self.logger.info(f"Successfully uploaded {len(contacts)} contacts to FritzBox")
+                self.logger.info(
+                    f"Successfully uploaded {len(contacts)} contacts to FritzBox"
+                )
             else:
                 self.logger.error("Failed to upload contacts to FritzBox")
 
@@ -178,7 +241,9 @@ class FritzBoxUploader:
             self.logger.error(f"Error during FritzBox upload: {e}")
             return False
 
-    def _generate_phonebook_xml(self, contacts: List[Contact], phonebook_name: str) -> str:
+    def _generate_phonebook_xml(
+        self, contacts: List[Contact], phonebook_name: str
+    ) -> str:
         """Generate FritzBox phonebook XML document from Contact objects.
 
         Args:
@@ -247,12 +312,12 @@ class FritzBoxUploader:
             uniqueid_elem.text = str(contact_xml.unique_id)
 
         # Add setup and features elements
-        setup_elem = ET.SubElement(phonebook_elem, "setup")
+        ET.SubElement(phonebook_elem, "setup")
         features_elem = ET.SubElement(phonebook_elem, "features")
         features_elem.set("doorphone", "0")
 
         # Pretty print the XML
-        xml_str = ET.tostring(root, encoding='utf-8')
+        xml_str = ET.tostring(root, encoding="utf-8")
         return self._pretty_print_xml(xml_str)
 
     def _convert_contact_to_xml(self, contact: Contact) -> ContactXML:
@@ -267,25 +332,26 @@ class FritzBoxUploader:
         contact_xml = ContactXML(
             name=contact.name,
             category="1" if contact.is_vip else "0",
-            image_url=contact.picture_url
+            image_url=contact.picture_url,
         )
 
         # Convert phone numbers
         for phone in contact.phone_numbers:
-            contact_xml.phone_numbers.append(PhoneNumber(
-                number=phone.number,
-                type=phone.type,
-                prio=phone.prio,
-                quickdial=phone.quickdial,
-                vanity=phone.vanity
-            ))
+            contact_xml.phone_numbers.append(
+                PhoneNumber(
+                    number=phone.number,
+                    type=phone.type,
+                    prio=phone.prio,
+                    quickdial=phone.quickdial,
+                    vanity=phone.vanity,
+                )
+            )
 
         # Convert email addresses
         for email in contact.emails:
-            contact_xml.email_addresses.append(EmailAddress(
-                email=email.email,
-                classifier=email.classifier
-            ))
+            contact_xml.email_addresses.append(
+                EmailAddress(email=email.email, classifier=email.classifier)
+            )
 
         contact_xml.unique_id = contact.unique_id
         return contact_xml
@@ -300,13 +366,15 @@ class FritzBoxUploader:
             Pretty-printed XML as string
         """
         try:
-            dom = minidom.parseString(xml_bytes.decode('utf-8'))
-            return dom.toprettyxml(indent="  ", encoding='utf-8').decode('utf-8')
-        except:
+            dom = minidom.parseString(xml_bytes.decode("utf-8"))
+            return dom.toprettyxml(indent="  ", encoding="utf-8").decode("utf-8")
+        except Exception:
             # Fallback to simple formatting
-            return xml_bytes.decode('utf-8')
+            return xml_bytes.decode("utf-8")
 
-    def _upload_to_fritzbox(self, xml_content: str, phonebook_name: str, phonebook_id: int) -> bool:
+    def _upload_to_fritzbox(
+        self, xml_content: str, phonebook_name: str, phonebook_id: int
+    ) -> bool:
         """Upload XML phonebook to FritzBox via multipart/form-data.
 
         Args:
@@ -321,14 +389,14 @@ class FritzBoxUploader:
             url = f"http://{self.host}/cgi-bin/firmwarecfg"
 
             files = {
-                'sid': (None, self.session_id),
-                'PhonebookId': (None, str(phonebook_id)),
-                'PhonebookImportName': (None, phonebook_name),
-                'PhonebookImportFile': (
-                    'phonebook.xml',
-                    xml_content.encode('utf-8'),
-                    'text/xml'
-                )
+                "sid": (None, self.session_id),
+                "PhonebookId": (None, str(phonebook_id)),
+                "PhonebookImportName": (None, phonebook_name),
+                "PhonebookImportFile": (
+                    "phonebook.xml",
+                    xml_content.encode("utf-8"),
+                    "text/xml",
+                ),
             }
 
             response = requests.post(url, files=files, timeout=30)
@@ -339,7 +407,9 @@ class FritzBoxUploader:
             success = response_xml.findtext("success") == "1"
 
             if success:
-                self.logger.info(f"Successfully uploaded phonebook '{phonebook_name}' to FritzBox")
+                self.logger.info(
+                    f"Successfully uploaded phonebook '{phonebook_name}' to FritzBox"
+                )
             else:
                 error_msg = response_xml.findtext("error") or "Unknown error"
                 self.logger.error(f"FritzBox upload failed: {error_msg}")
@@ -384,8 +454,9 @@ class XMLGenerator:
     """
 
     @staticmethod
-    def generate_phonebook_xml(phonebook_name: str, contacts: List[Contact],
-                               phonebook_id: int = 0) -> str:
+    def generate_phonebook_xml(
+        phonebook_name: str, contacts: List[Contact], phonebook_id: int = 0
+    ) -> str:
         """Generate complete phonebook XML document.
 
         Args:
@@ -398,12 +469,9 @@ class XMLGenerator:
         """
         uploader = FritzBoxUploader(
             FritzBoxConfig(
-                url=f"http://{phonebook_name}",
-                username="",
-                password="",
-                target_book=""
+                url=f"http://{phonebook_name}", username="", password="", target_book=""
             ),
-            logging.getLogger(__name__)
+            logging.getLogger(__name__),
         )
 
         return uploader._generate_phonebook_xml(contacts, phonebook_name)
@@ -455,7 +523,7 @@ def example_usage():
         url="https://fritz.box",
         username="test_user",
         password="test_password",
-        target_book="CardDAV Sync"
+        target_book="CardDAV Sync",
     )
 
     # Create uploader
@@ -473,16 +541,16 @@ def example_usage():
         Contact(
             name="John Doe",
             phone_numbers=[PhoneNumber(number="+1234567890", type="home", prio=1)],
-            emails=[EmailAddress(email="john@example.com", classifier="private")]
+            emails=[EmailAddress(email="john@example.com", classifier="private")],
         ),
         Contact(
             name="Jane Smith",
             phone_numbers=[
                 PhoneNumber(number="+442071234567", type="mobile", prio=1),
-                PhoneNumber(number="+44203456789", type="work", prio=0)
+                PhoneNumber(number="+44203456789", type="work", prio=0),
             ],
-            emails=[EmailAddress(email="jane@company.com", classifier="work")]
-        )
+            emails=[EmailAddress(email="jane@company.com", classifier="work")],
+        ),
     ]
 
     # Upload phonebook

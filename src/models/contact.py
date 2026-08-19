@@ -5,6 +5,44 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
 
+def canonicalize_phone(
+    digits: str,
+    country_code: str = "",
+    area_code: str = "",
+    international_access_code: str = "",
+) -> str:
+    """Return the canonical normalized form of a phone number (spec.md FR-005).
+
+    Canonical form contains only digits and a leading '+' (international
+    access sign). Algorithm:
+    1. If the number starts with '+', it is already canonical.
+    2. If it starts with the numeric international access code from config
+       (e.g. ``00`` Europe, ``09`` US), replace that code with '+'.
+    3. If it starts with '0', replace the leading '0' with '+' + country code.
+    4. Otherwise prepend '+' + country code + area code (without leading zero).
+
+    ``digits`` is expected to be sanitized first (only digits and an optional
+    leading '+' - FR-014). Without regional config, falls back to the input as
+    returned (numbers are assumed to be in canonical form).
+    """
+    if not digits or digits.startswith("+"):
+        return digits
+
+    country_digits = re.sub(r"[^0-9]", "", country_code)
+    if not country_digits:
+        return digits
+
+    access_digits = re.sub(r"[^0-9]", "", international_access_code)
+    if access_digits and digits.startswith(access_digits):
+        return "+" + digits[len(access_digits) :]
+
+    if digits.startswith("0"):
+        return "+" + country_digits + digits[1:]
+
+    area_digits = re.sub(r"[^0-9]", "", area_code).lstrip("0")
+    return "+" + country_digits + area_digits + digits
+
+
 @dataclass
 class PhoneNumber:
     number: str
@@ -33,34 +71,15 @@ class PhoneNumber:
         """Return the canonical normalized form of this number (spec.md FR-005).
 
         Canonical form contains only digits and a leading '+' (international
-        access sign). Algorithm:
-        1. If the number starts with '+', it is already canonical.
-        2. If it starts with the numeric international access code from config
-           (e.g. ``00`` Europe, ``09`` US), replace that code with '+'.
-        3. If it starts with '0', replace the leading '0' with '+' + country code.
-        4. Otherwise prepend '+' + country code + area code (without leading zero).
+        access sign). See :func:`canonicalize_phone` for the algorithm.
 
         Without regional config, falls back to the sanitized form (numbers are
         assumed to be stored in canonical form). Comparison of phone numbers for
         identity/deduplication always uses this form (spec.md FR-018).
         """
-        digits = self.sanitize()
-        if not digits or digits.startswith("+"):
-            return digits
-
-        country_digits = re.sub(r"[^0-9]", "", country_code)
-        if not country_digits:
-            return digits
-
-        access_digits = re.sub(r"[^0-9]", "", international_access_code)
-        if access_digits and digits.startswith(access_digits):
-            return "+" + digits[len(access_digits) :]
-
-        if digits.startswith("0"):
-            return "+" + country_digits + digits[1:]
-
-        area_digits = re.sub(r"[^0-9]", "", area_code).lstrip("0")
-        return "+" + country_digits + area_digits + digits
+        return canonicalize_phone(
+            self.sanitize(), country_code, area_code, international_access_code
+        )
 
     def is_primary(self) -> bool:
         """Check if this is the primary phone number."""

@@ -68,8 +68,8 @@ The spec was clarified (Session 2026-08-19: canonical number normalization/short
 - [x] T010 [P] [US1] REDO Config loader: rename `region_code` -> `area_code`, add `international_access_code`, make `country_code` and `area_code` mandatory with a clear, human-readable error when missing (FR-017) in src/config/loader.py and sample-config.ini
 - [x] T011 [P] [US1] REDO CardDAV fetcher: replace the mock `_fetch_source_contacts` with a real RFC 6352 fetch using `requests` — resolve `addressbook-home-set` (`.well-known/carddav` / PROPFIND), then `REPORT addressbook-query` for `address-data`; parse returned vCards with `vobject` (see contracts/carddav-api.md) in src/services/carddav_fetcher.py
 - [x] T012 [P] [US1] REDO PhoneNumberNormalizer: implement the canonical normalization algorithm (FR-005: leading `+` passthrough, international-access-code replacement, leading `0` -> `+`+country code, else prepend `+`+country+area code) and FritzBox shortening (FR-006: keep canonical if foreign country; else drop `+`+CC, add leading `0`, remove area code when equal) in src/services/converter.py
-- [ ] T013 [P] [US1] REDO FritzBox uploader: add PBKDF2-HMAC-SHA256 challenge-response for FRITZ!OS 7.24+ (challenge prefix `2$`), keeping the legacy MD5 path (research.md section 2.1) in src/services/fritzbox_uploader.py
-- [ ] T014 [US1] REDO CLI main: fix the empty `for` loop causing `IndentationError` at src/main.py:156 and wire the new config fields (`area_code`, `international_access_code`) into the normalizer in src/main.py
+- [x] T013 [P] [US1] REDO FritzBox uploader: add PBKDF2-HMAC-SHA256 challenge-response for FRITZ!OS 7.24+ (challenge prefix `2$`), keeping the legacy MD5 path (research.md section 2.1) in src/services/fritzbox_uploader.py
+- [x] T014 [US1] REDO CLI main: fix the empty `for` loop causing `IndentationError` at src/main.py:156 and wire the new config fields (`area_code`, `international_access_code`) into the normalizer in src/main.py
 - [ ] T015 [P] [US1] Remove `caldav` from the venv and confirm no `import caldav` remains in src/; verify runtime imports `requests`, `vobject`, `PIL` from .venv
 
 ### Tests for User Story 1

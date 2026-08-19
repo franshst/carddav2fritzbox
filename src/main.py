@@ -14,9 +14,13 @@ Key features:
 - Graceful failure handling with informative error messages
 """
 
-import argparse
-import logging
+import os
 import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import argparse
 from typing import Optional
 
 from src.config.loader import load_config, print_config_summary
@@ -24,7 +28,6 @@ from src.services.carddav_fetcher import CardDAVFetcher
 from src.services.converter import (
     PhoneNumberNormalizer,
     ImageConverter,
-    extract_phone_number_info,
     process_contact_photos,
     validate_and_normalize_contact,
 )
@@ -50,32 +53,31 @@ The configuration file (INI format) should contain:
   - FritzBox connection details
   - CardDAV source credentials
   - Regional settings for phone number normalization
-        """
+        """,
     )
 
     parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to INI configuration file"
+        "--config", required=True, help="Path to INI configuration file"
     )
 
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default="INFO",
-        help="Logging level (default: INFO)"
+        help="Logging level (default: INFO)",
     )
 
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate configuration and show what would be synced, but don't actually sync"
+        help="Validate configuration and show what would be synced, "
+        "but don't actually sync",
     )
 
     parser.add_argument(
         "--validate-only",
         action="store_true",
-        help="Validate configuration and exit without running sync"
+        help="Validate configuration and exit without running sync",
     )
 
     return parser.parse_args()
@@ -145,27 +147,30 @@ def run_sync(config, dry_run: bool = False) -> bool:
         normalized_contacts = []
         normalizer = PhoneNumberNormalizer(
             country_code=config.regional.country_code,
-            region_code=config.regional.region_code
+            area_code=config.regional.area_code,
+            international_access_code=config.regional.international_access_code,
         )
 
         for i, contact in enumerate(contacts):
             # Process photo
             contact = process_contact_photos(contact, converter)
 
-            # Extract phone number info if needed
-            for phone in contact.phone_numbers:
-                # This is handled during Contact parsing
-
             # Validate and normalize contact
             validated_contact = validate_and_normalize_contact(contact, normalizer)
             normalized_contacts.append(validated_contact)
 
-            logger.info(f"Processed contact {i + 1}/{len(contacts)}: {validated_contact.name}")
+            logger.info(
+                f"Processed contact {i + 1}/{len(contacts)}: "
+                f"{validated_contact.name}"
+            )
 
         if dry_run:
             logger.info("Dry run mode - showing contact summary:")
             for contact in normalized_contacts:
-                print(f"  - {contact.name}: {len(contact.phone_numbers)} phones, {len(contact.emails)} emails")
+                print(
+                    f"  - {contact.name}: {len(contact.phone_numbers)} phones, "
+                    f"{len(contact.emails)} emails"
+                )
             logger.info("Dry run completed successfully")
             return True
 
@@ -174,7 +179,7 @@ def run_sync(config, dry_run: bool = False) -> bool:
         success = uploader.upload_phonebook(
             normalized_contacts,
             config.fritzbox.target_book,
-            phonebook_id=0  # Default to first phonebook
+            phonebook_id=0,  # Default to first phonebook
         )
 
         if success:

@@ -8,7 +8,6 @@ Tests the converter module functionality:
 
 import base64
 import pytest
-from io import BytesIO
 from unittest.mock import Mock, patch
 
 from src.services.converter import (
@@ -37,16 +36,16 @@ class TestPhoneNumberNormalizer:
         assert result == "+442079460958"
 
     def test_normalize_adds_country_code(self):
-        """Test that local numbers get country code added."""
+        """Test that local numbers (leading 0) get country code added (FR-005)."""
         normalizer = PhoneNumberNormalizer("+49", "30")
-        result = normalizer.normalize("301234567")
+        result = normalizer.normalize("0301234567")
         assert result == "+49301234567"
 
     def test_format_for_fritzbox_with_plus(self):
-        """Test formatting for FritzBox preserves '+' format."""
+        """Test shortening for FritzBox (FR-006): local number drops +/CC/area."""
         normalizer = PhoneNumberNormalizer("+49", "30")
         result = normalizer.format_for_fritzbox("+4930123467")
-        assert result == "+4930123467"
+        assert result == "0123467"
 
     def test_format_for_fritzbox_without_plus(self):
         """Test formatting for FritzBox adds country code if needed."""
@@ -93,7 +92,7 @@ class TestImageConverter:
         self.logger = Mock()
         self.converter = ImageConverter(self.logger)
 
-    @patch('PIL.Image.open')
+    @patch("PIL.Image.open")
     def test_convert_base64_to_jpg(self, mock_image_open):
         """Test conversion of Base64 image to JPG."""
         mock_image = Mock()
@@ -107,24 +106,23 @@ class TestImageConverter:
         mock_bytes_io = Mock()
         mock_image.save.return_value = None
 
-        with patch('io.BytesIO', return_value=mock_bytes_io):
+        with patch("io.BytesIO", return_value=mock_bytes_io):
             result = self.converter.convert_vcard_photo(
-                base64.b64encode(b"fake_image_data").decode('utf-8'),
-                photo_type='base64'
+                base64.b64encode(b"fake_image_data").decode("utf-8"),
+                photo_type="base64",
             )
             assert result[0] is not None or result[1] is not None
 
     def test_convert_external_uri(self):
         """Test handling of external photo URIs."""
         result = self.converter.convert_vcard_photo(
-            "https://example.com/avatar.png",
-            photo_type='uri'
+            "https://example.com/avatar.png", photo_type="uri"
         )
         assert result == (None, "https://example.com/avatar.png")
 
     def test_convert_raw_bytes(self):
         """Test conversion of raw binary image data."""
-        with patch('PIL.Image.open') as mock_open:
+        with patch("PIL.Image.open") as mock_open:
             mock_image = Mock()
             mock_image.mode = "RGB"
             mock_image.size = (400, 400)
@@ -133,20 +131,20 @@ class TestImageConverter:
             mock_image.resize.return_value = mock_image
             mock_open.return_value = mock_image
 
-            with patch('io.BytesIO'):
+            with patch("io.BytesIO"):
                 result = self.converter.convert_vcard_photo(b"raw_image_data")
                 assert result[0] is not None
 
     def test_crop_to_square(self):
         """Test cropping image to square aspect ratio."""
-        with patch('PIL.Image.open') as mock_open:
+        with patch("PIL.Image.open") as mock_open:
             mock_image = Mock()
             mock_image.mode = "RGB"
             mock_image.size = (600, 400)
             mock_image.crop.return_value = Mock()
             mock_open.return_value = mock_image
 
-            with patch('io.BytesIO'):
+            with patch("io.BytesIO"):
                 self.converter._crop_to_square(mock_image)
                 mock_image.crop.assert_called()
 
@@ -193,9 +191,11 @@ class TestExtractPhoneNumberInfo:
 
     def test_extract_phone_number_info_without_plus(self):
         """Test extraction with local phone number."""
-        with patch('src.services.converter.PhoneNumberNormalizer') as mock_normalizer:
+        with patch("src.services.converter.PhoneNumberNormalizer") as mock_normalizer:
             mock_normalizer.return_value.normalize.return_value = "1234567890"
-            mock_normalizer.return_value.format_for_fritzbox.return_value = "+491234567890"
+            mock_normalizer.return_value.format_for_fritzbox.return_value = (
+                "+491234567890"
+            )
 
             phone = extract_phone_number_info("1234567890", "home", 0)
             assert phone.number == "+491234567890"
@@ -209,7 +209,7 @@ class TestProcessContactPhotos:
         self.image_converter = Mock()
         self.image_converter.convert_vcard_photo.return_value = (
             b"converted_jpg_data",
-            None
+            None,
         )
 
     def test_process_contact_photos_with_data(self):
@@ -218,12 +218,12 @@ class TestProcessContactPhotos:
             name="Test User",
             phone_numbers=[],
             picture_data=b"base64_image_data",
-            picture_url=None
+            picture_url=None,
         )
 
         self.image_converter.convert_vcard_photo.return_value = (
             b"converted_jpg_data",
-            None
+            None,
         )
 
         result = process_contact_photos(contact, self.image_converter)
@@ -236,7 +236,7 @@ class TestProcessContactPhotos:
             name="Test User",
             phone_numbers=[],
             picture_data=None,
-            picture_url="https://example.com/photo.jpg"
+            picture_url="https://example.com/photo.jpg",
         )
 
         result = process_contact_photos(contact, self.image_converter)
@@ -246,10 +246,7 @@ class TestProcessContactPhotos:
     def test_process_contact_photos_no_photo(self):
         """Test processing contact without photo."""
         contact = Contact(
-            name="Test User",
-            phone_numbers=[],
-            picture_data=None,
-            picture_url=None
+            name="Test User", phone_numbers=[], picture_data=None, picture_url=None
         )
 
         result = process_contact_photos(contact, self.image_converter)
@@ -268,12 +265,14 @@ class TestValidateAndNormalizeContact:
             name="John Doe",
             phone_numbers=[
                 PhoneNumber(number="+4930123456", type="mobile", prio=1),
-                PhoneNumber(number="301234567", type="home", prio=0)
+                PhoneNumber(number="301234567", type="home", prio=0),
             ],
-            emails=[EmailAddress(email="john@example.com", classifier="private")]
+            emails=[EmailAddress(email="john@example.com", classifier="private")],
         )
 
-        with patch('src.services.converter.PhoneNumberNormalizer', return_value=normalizer):
+        with patch(
+            "src.services.converter.PhoneNumberNormalizer", return_value=normalizer
+        ):
             result = validate_and_normalize_contact(contact)
 
         assert result.name == "John Doe"
@@ -288,10 +287,12 @@ class TestValidateAndNormalizeContact:
         contact = Contact(
             name="John Doe",
             phone_numbers=[PhoneNumber(number="123", type="home", prio=0)],
-            emails=[]
+            emails=[],
         )
 
-        with patch('src.services.converter.PhoneNumberNormalizer', return_value=normalizer):
+        with patch(
+            "src.services.converter.PhoneNumberNormalizer", return_value=normalizer
+        ):
             result = validate_and_normalize_contact(contact)
 
         assert len(result.phone_numbers) == 0
@@ -302,7 +303,7 @@ class TestValidateAndNormalizeContact:
             name="John Doe",
             phone_numbers=[],
             picture_data=b"photo_data",
-            picture_url=None
+            picture_url=None,
         )
 
         result = validate_and_normalize_contact(contact)
