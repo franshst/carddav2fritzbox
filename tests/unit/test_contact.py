@@ -7,7 +7,7 @@ in the canonical normalized form (spec.md FR-018) via PhoneNumber.canonical
 
 import pytest
 
-from src.models.contact import Contact, PhoneNumber, EmailAddress
+from src.models.contact import Contact, EmailAddress, PhoneNumber
 
 REGIONAL_DE = dict(country_code="+49", area_code="30", international_access_code="00")
 
@@ -146,6 +146,76 @@ class TestContactIdentity:
         identity = contact1.get_normalized_identity(**REGIONAL_DE)
         assert "John Doe" in identity
         assert "+4930123456" in identity
+
+
+class TestMergeWithDedup:
+    """Multi-value fields are appended only when unique (FR-004)."""
+
+    def test_identical_canonical_phone_appended_once(self):
+        """Raw forms that share a canonical form (FR-018) collapse to one; the
+        first occurrence wins and keeps its original raw representation."""
+        contact1 = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="+4930123456", type="home", prio=1)],
+            emails=[],
+        )
+        contact2 = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="030123456", type="home", prio=1)],
+            emails=[],
+        )
+        merged = contact1.merge_with(contact2, **REGIONAL_DE)
+        assert len(merged.phone_numbers) == 1
+        assert merged.phone_numbers[0].number == "+4930123456"
+
+    def test_case_variant_email_appended_once(self):
+        """Email addresses differing only in case collapse to one."""
+        contact1 = Contact(
+            name="John Doe",
+            phone_numbers=[],
+            emails=[EmailAddress(email="John@Example.com", classifier="private")],
+        )
+        contact2 = Contact(
+            name="John Doe",
+            phone_numbers=[],
+            emails=[EmailAddress(email="john@example.com", classifier="work")],
+        )
+        merged = contact1.merge_with(contact2)
+        assert len(merged.emails) == 1
+        assert merged.emails[0].email == "John@Example.com"
+
+    def test_distinct_values_are_preserved(self):
+        """Genuinely distinct phones and emails are all appended."""
+        contact1 = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="+4930123456", type="home", prio=1)],
+            emails=[EmailAddress(email="john@example.com", classifier="private")],
+        )
+        contact2 = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="+14155552671", type="mobile", prio=1)],
+            emails=[EmailAddress(email="john@work.com", classifier="work")],
+        )
+        merged = contact1.merge_with(contact2, **REGIONAL_DE)
+        assert len(merged.phone_numbers) == 2
+        assert len(merged.emails) == 2
+
+    def test_without_config_dedups_exact_strings(self):
+        """Without regional config, phone comparison falls back to the
+        sanitized exact form; identical strings are still deduplicated."""
+        contact1 = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="+4930123456")],
+            emails=[EmailAddress(email="john@example.com")],
+        )
+        contact2 = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="+4930123456")],
+            emails=[EmailAddress(email="john@example.com")],
+        )
+        merged = contact1.merge_with(contact2)
+        assert len(merged.phone_numbers) == 1
+        assert len(merged.emails) == 1
 
 
 if __name__ == "__main__":

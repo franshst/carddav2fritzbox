@@ -1,8 +1,7 @@
 """Unit tests for logger utility and contact model."""
 
 import logging
-import os
-import pytest
+
 from src.models.contact import Contact, EmailAddress, PhoneNumber
 from src.utils.logger import setup_logger
 

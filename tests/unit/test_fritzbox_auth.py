@@ -12,9 +12,9 @@ import pytest
 import requests
 
 from src.config.loader import FritzBoxConfig
+from src.models.contact import Contact, PhoneNumber
 from src.services.converter import PhoneNumberNormalizer
 from src.services.fritzbox_uploader import FritzBoxUploader
-from src.models.contact import Contact, PhoneNumber
 
 
 def _make_uploader(password: str = "1example!") -> FritzBoxUploader:

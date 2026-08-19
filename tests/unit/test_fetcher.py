@@ -5,13 +5,13 @@ import logging
 import vobject
 
 from src.config.loader import (
-    SyncConfig,
-    GeneralConfig,
-    FritzBoxConfig,
-    RegionalConfig,
     CardDAVSourceConfig,
+    FritzBoxConfig,
+    GeneralConfig,
+    RegionalConfig,
+    SyncConfig,
 )
-from src.models.contact import Contact, PhoneNumber, EmailAddress
+from src.models.contact import Contact, EmailAddress, PhoneNumber
 from src.services.carddav_fetcher import CardDAVFetcher
 
 
@@ -84,7 +84,9 @@ class TestSplitVcards:
 class TestMergeContacts:
     def test_merges_duplicate_across_sources(self):
         """A contact present in both sources collapses into one entry and the
-        first (highest priority) one wins, appending multi-value fields."""
+        first (highest priority) one wins; the identical phone number (raw
+        `06 40278235` vs `0640278235` — same canonical form) is appended only
+        once, while the distinct email is added (FR-004)."""
         fetcher = _make_fetcher()
         prio1 = Contact(
             name="Aart Stuurman",
@@ -98,7 +100,47 @@ class TestMergeContacts:
         )
         merged = fetcher.merge_contacts([prio1, prio2])
         assert len(merged) == 1
+        assert len(merged[0].phone_numbers) == 1
+        assert merged[0].phone_numbers[0].number == "06 40278235"
+        assert len(merged[0].emails) == 2
+
+    def test_dedups_case_variant_emails(self):
+        """Email addresses that differ only in case collapse to one (the first
+        occurrence wins), while distinct phones are all kept (FR-004)."""
+        fetcher = _make_fetcher()
+        prio1 = Contact(
+            name="Aart Stuurman",
+            phone_numbers=[PhoneNumber("0640278235")],
+            emails=[EmailAddress("Aart@Hotmail.com")],
+        )
+        prio2 = Contact(
+            name="Aart Stuurman",
+            phone_numbers=[PhoneNumber("0612345678")],
+            emails=[EmailAddress("aart@hotmail.com")],
+        )
+        merged = fetcher.merge_contacts([prio1, prio2])
+        assert len(merged) == 1
         assert len(merged[0].phone_numbers) == 2
+        assert len(merged[0].emails) == 1
+        assert merged[0].emails[0].email == "Aart@Hotmail.com"
+
+    def test_preserves_distinct_values(self):
+        """Genuinely distinct phones and emails are all preserved when merging;
+        only the shared phone is appended once."""
+        fetcher = _make_fetcher()
+        prio1 = Contact(
+            name="Aart Stuurman",
+            phone_numbers=[PhoneNumber("0640278235"), PhoneNumber("0204486970")],
+            emails=[EmailAddress("aart@hotmail.com")],
+        )
+        prio2 = Contact(
+            name="Aart Stuurman",
+            phone_numbers=[PhoneNumber("0640278235"), PhoneNumber("0612345678")],
+            emails=[EmailAddress("aartstuurman@hotmail.com")],
+        )
+        merged = fetcher.merge_contacts([prio1, prio2])
+        assert len(merged) == 1
+        assert len(merged[0].phone_numbers) == 3
         assert len(merged[0].emails) == 2
 
     def test_keeps_distinct_contacts(self):

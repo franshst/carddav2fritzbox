@@ -15,15 +15,16 @@ Key features:
 import hashlib
 import logging
 import re
-import requests
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 from xml.dom import minidom
 
-from src.models.contact import Contact, PhoneNumber, EmailAddress
+import requests
+
 from src.config.loader import FritzBoxConfig
+from src.models.contact import Contact, EmailAddress, PhoneNumber
 from src.services.converter import PhoneNumberNormalizer
 from src.services.tr064 import Tr064Client
 

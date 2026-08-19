@@ -8,7 +8,7 @@ Tests the config loader module:
 
 import pytest
 
-from src.config.loader import load_config, SyncConfig
+from src.config.loader import SyncConfig, load_config
 
 
 def _write_config(tmp_path, content: str) -> str:

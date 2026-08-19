@@ -22,6 +22,7 @@
 ### Session 2026-08-19
 - Q: What should the tool do with a source telephone number that cannot be normalized (e.g., no digits remain after sanitization, or an unparseable string)? → A: Skip the number, keep the contact with its remaining valid numbers, and log a warning to stderr.
 - Q: Should the configured area code always be required, or may it be absent for regions without area codes? → A: Mandatory — the config always defines `country_code` and `area_code`; missing values cause a clear validation error.
+- Q: After contacts are merged, should duplicate identical telephone numbers (and email addresses) within a contact be removed? → A: Yes — multi-occurrence fields are appended only when unique; identical values are kept once (first occurrence wins), telephone numbers compared in canonical normalized form and email addresses case-insensitively.
 
 ## User Scenarios & Testing
 
@@ -62,6 +63,7 @@ The user wants the utility to securely handle credentials for both the CardDAV s
 - What happens when a source telephone number cannot be normalized (e.g., no digits remain after sanitization)? → The number is skipped, the contact is kept with its remaining valid numbers, and a warning is logged to stderr.
 - What happens when the configuration is missing `country_code` or `area_code`? → The tool exits with a clear, human-readable error to stderr and a non-zero status.
 - What happens when a source number already starts with `+`? → It is treated as already normalized and used as-is for comparison and shortening.
+- What happens when a merged contact contains the same telephone number (or email address) from multiple sources? → The value is stored once (first occurrence wins); telephone numbers are compared in canonical normalized form and email addresses case-insensitively.
 
 ## Requirements
 
@@ -73,7 +75,7 @@ The user wants the utility to securely handle credentials for both the CardDAV s
 - **FR-004**: System MUST merge contact data from multiple sources:
     - A contact is identified as identical if the name and either a (normalized) telephone number or an email address matches.
     - Fields representable only once (e.g., picture, home address) MUST be taken from the first encountered contact based on the sequential order of sources defined in the configuration file.
-    - Fields allowing multiple occurrences (e.g., telephone numbers, email addresses) MUST be merged by appending them.
+    - Fields allowing multiple occurrences (e.g., telephone numbers, email addresses) MUST be merged by appending them, but only when unique: duplicate identical values MUST be dropped (keeping the first occurrence). Telephone numbers are compared in canonical normalized form (FR-018); email addresses are compared case-insensitively.
 - **FR-005**: System MUST normalize telephone numbers into a canonical intermediate form containing only digits and a leading `+` (international access) sign: if the number starts with `+`, it is already normalized; if it starts with the numeric international access code from config (e.g., `00` in Europe, `09` in the US), replace that code with `+`; if it starts with `0`, replace the leading `0` with `+` followed by the configured country code; otherwise prepend `+`, the configured country code, and the configured area code without its leading zero.
 - **FR-006**: System MUST shorten telephone numbers for the FritzBox telephone book: keep numbers whose country code differs from the book's configured country in canonical form; otherwise remove the `+` and country code, prepend a leading `0`, and remove the area code when it equals the book's configured area code (the trunk `0` and area code are not dialed within the same area, leaving the bare subscriber number, e.g. in the Netherlands).
 - **FR-007**: System MUST ensure no sensitive credentials are stored in plaintext.

@@ -18,18 +18,18 @@ from unittest.mock import patch
 import pytest
 
 from src.config.loader import (
-    SyncConfig,
-    GeneralConfig,
-    FritzBoxConfig,
-    RegionalConfig,
     CardDAVSourceConfig,
+    FritzBoxConfig,
+    GeneralConfig,
+    RegionalConfig,
+    SyncConfig,
     load_config,
 )
-from src.models.contact import Contact, PhoneNumber, EmailAddress
+from src.models.contact import Contact, EmailAddress, PhoneNumber
 from src.services.carddav_fetcher import CardDAVFetcher
 from src.services.converter import (
-    PhoneNumberNormalizer,
     ImageConverter,
+    PhoneNumberNormalizer,
     validate_and_normalize_contact,
 )
 from src.services.fritzbox_uploader import FritzBoxUploader
@@ -421,7 +421,8 @@ name_order = first_name_first
 
             # Merge by priority (FR-004/FR-013): sources are fetched in priority
             # order, so the first encounter of an identity wins; multi-value
-            # fields from later sources are appended.
+            # fields from later sources are appended only when unique (identical
+            # values are kept once, phones compared in canonical form).
             merged = []
             for contact in fetched:
                 existing_idx = next(
@@ -437,15 +438,16 @@ name_order = first_name_first
                 if existing_idx is None:
                     merged.append(contact)
                 else:
-                    merged[existing_idx].merge_with(contact)
+                    merged[existing_idx].merge_with(contact, "+49", "30", "00")
 
             assert len(merged) == 3
 
             # The priority-1 John Doe contact now carries source-2's extra
-            # fields (FR-004 appends multi-value fields without dedup)
+            # fields; the identical number/email are appended only once
+            # (FR-004 dedups multi-value fields on merge)
             john = next(c for c in merged if c.name == "John Doe")
-            assert len(john.phone_numbers) == 3
-            assert len(john.emails) == 3
+            assert len(john.phone_numbers) == 2
+            assert len(john.emails) == 2
             assert {e.email for e in john.emails} == {
                 "john@example.com",
                 "john@work.com",
@@ -460,7 +462,6 @@ name_order = first_name_first
             john_norm = next(c for c in normalized if c.name == "John Doe")
             assert sorted(p.number for p in john_norm.phone_numbers) == [
                 "+14155552671",
-                "+49301234567",
                 "+49301234567",
             ]
 
@@ -552,10 +553,10 @@ name_order = first_name_first
         is_duplicate = contact1.is_duplicate_of(contact2, "first_name_first")
         assert is_duplicate is True
 
-        # Test merging
+        # Test merging (identical values are appended only once, FR-004)
         merged = contact1.merge_with(contact2)
-        assert len(merged.phone_numbers) == 2  # Both phones from contact2 added
-        assert len(merged.emails) == 2
+        assert len(merged.phone_numbers) == 1  # Duplicate phone deduplicated
+        assert len(merged.emails) == 1  # Duplicate email deduplicated
 
 
 if __name__ == "__main__":

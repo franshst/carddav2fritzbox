@@ -49,7 +49,7 @@ class Contact:
   - *Shorten*: At FritzBox export, local numbers (book's configured country code) are shortened by removing `+` and the country code and prepending `0`; when the area code equals the configured one it is removed together with the trunk `0` (not dialed within the same area), leaving the bare subscriber number; international numbers are stored in canonical form (spec.md FR-006).
 - **Merge**:
   - Name: Taken from first source (canonical).
-  - Multi-fields (phones, emails): Appended.
+  - Multi-fields (phones, emails): Appended, deduplicated — identical values are kept once (first occurrence wins); phones compared in canonical normalized form, emails case-insensitively.
   - Single-fields (picture, address): Taken from highest-priority source.
 - **FritzBox Export**:
   - Write formatted name string to `<person>/<realName>`.

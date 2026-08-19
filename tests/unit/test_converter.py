@@ -7,17 +7,18 @@ Tests the converter module functionality:
 """
 
 import base64
-import pytest
 from unittest.mock import Mock, patch
 
+import pytest
+
+from src.models.contact import Contact, EmailAddress, PhoneNumber
 from src.services.converter import (
-    PhoneNumberNormalizer,
     ImageConverter,
+    PhoneNumberNormalizer,
     extract_phone_number_info,
     process_contact_photos,
     validate_and_normalize_contact,
 )
-from src.models.contact import Contact, PhoneNumber, EmailAddress
 
 
 class TestPhoneNumberNormalizer:

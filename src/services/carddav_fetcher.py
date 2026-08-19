@@ -22,7 +22,7 @@ import vobject
 from vobject import vCard
 
 from src.config.loader import SyncConfig
-from src.models.contact import Contact, PhoneNumber, EmailAddress
+from src.models.contact import Contact, EmailAddress, PhoneNumber
 
 _DAV_NS = "DAV:"
 _CARDDAV_NS = "urn:ietf:params:xml:ns:carddav"
@@ -688,7 +688,12 @@ class CardDAVFetcher:
             if existing_idx is None:
                 merged.append(contact)
             else:
-                merged[existing_idx].merge_with(contact)
+                merged[existing_idx].merge_with(
+                    contact,
+                    regional.country_code,
+                    regional.area_code,
+                    regional.international_access_code,
+                )
 
         self.logger.info(
             f"Merged {len(contacts)} contacts into {len(merged)} unique contacts"
@@ -769,11 +774,11 @@ def example_usage():
 
     # Mock configuration for example
     from src.config.loader import (
-        SyncConfig,
-        GeneralConfig,
-        FritzBoxConfig,
-        RegionalConfig,
         CardDAVSourceConfig,
+        FritzBoxConfig,
+        GeneralConfig,
+        RegionalConfig,
+        SyncConfig,
     )
 
     config = SyncConfig(

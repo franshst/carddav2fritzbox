@@ -12,10 +12,12 @@ Key features:
 import base64
 import re
 import sys
-from typing import Optional, Tuple, Union
 from io import BytesIO
+from typing import Optional, Tuple, Union
+
 from PIL import Image
-from src.models.contact import PhoneNumber, Contact, canonicalize_phone
+
+from src.models.contact import Contact, PhoneNumber, canonicalize_phone
 
 
 class PhoneNumberNormalizer:

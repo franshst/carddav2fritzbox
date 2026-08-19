@@ -26,8 +26,8 @@ from typing import Optional
 from src.config.loader import load_config, print_config_summary
 from src.services.carddav_fetcher import CardDAVFetcher
 from src.services.converter import (
-    PhoneNumberNormalizer,
     ImageConverter,
+    PhoneNumberNormalizer,
     process_contact_photos,
     validate_and_normalize_contact,
 )

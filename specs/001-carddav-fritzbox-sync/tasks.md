@@ -109,8 +109,8 @@ The spec was clarified (Session 2026-08-19: canonical number normalization/short
 **Purpose**: Final validation and cleanup affecting all user stories
 
 - [x] T023 Run quickstart.md end-to-end validation against a test config (dry-run, then upload if a FritzBox is available)
-- [ ] T026 Real-device end-to-end test: ask the user to confirm config.ini is correctly filled with test credentials (real CardDAV sources and FritzBox, NOT production data), then run `python src/main.py --config config.ini --validate-only` and `--dry-run` against the real services; run a real upload only after explicit user confirmation (mirror sync completely overwrites the target phonebook)
-- [ ] T024 [P] Full quality gate: `pytest`, `flake8`, `black --check`, `isort --check` all pass
+- [x] T026 Real-device end-to-end test: ask the user to confirm config.ini is correctly filled with test credentials (real CardDAV sources and FritzBox, NOT production data), then run `python src/main.py --config config.ini --validate-only` and `--dry-run` against the real services; run a real upload only after explicit user confirmation (mirror sync completely overwrites the target phonebook). Verified: `--validate-only` and `--dry-run` exit 0 (407 fetched, 377 unique); live upload into book "Test" (real id 3) succeeded with 334 contacts; box check shows 342 entries (334 + 8 system), Aart Stuurman has a single `0640278235`, Amsta `4486970`, and zero numbers starting with `020`
+- [x] T024 [P] Full quality gate: `pytest`, `flake8`, `black --check`, `isort --check` all pass
 - [x] T025 Documentation updates in docs/ and README.md
 
 ### User-Reported Fixes (real-device validation round, 2026-08-19)
@@ -134,6 +134,16 @@ duplicates were not merged.
 - [x] T032 Fix FR-006 shortening: `PhoneNumberNormalizer.shorten` keeps the area code for foreign-area local numbers but removes it together with the trunk `0` when it equals the configured area code (the area code is not dialed within the same area, e.g. in the Netherlands), leaving the bare subscriber number; amend spec.md FR-006 + data-model.md; regression test `020-448-6970` -> `4486970` in tests/unit/test_converter.py
 - [x] T033 Fix vCard line folding: `CardDAVFetcher._split_vcards` preserves line endings and continuation whitespace so vobject can unfold folded lines (RFC 6350 §3.2); tests in tests/unit/test_fetcher.py
 - [x] T034 Wire FR-004 merging: `CardDAVFetcher.merge_contacts` collapses cross-source duplicates by identity (priority-1 wins, multi-value fields appended) and `src/main.py` calls it after fetch; tests in tests/unit/test_fetcher.py
+
+Merging collapsed duplicate contacts but still appended their multi-value fields
+verbatim, so a contact present in both sources stored its identical phone number
+twice (e.g. Aart Stuurman's `0640278235`). Spec clarification (Session
+2026-08-19): multi-occurrence fields are appended only when unique — identical
+values are kept once (first occurrence wins), telephone numbers compared in
+canonical normalized form, emails case-insensitively (FR-004).
+
+- [x] T035 [P] [US1] Implement multi-value dedup in `Contact.merge_with` in src/models/contact.py: append only phone numbers and email addresses not already present (telephone numbers compared in canonical normalized form via `PhoneNumber.canonical(country_code, area_code, international_access_code)`, emails case-insensitively, first occurrence wins); extend the signature with optional regional params (default empty = exact-string comparison) and pass them from `CardDAVFetcher.merge_contacts` in src/services/carddav_fetcher.py
+- [x] T036 [P] [US1] Update/add unit tests for multi-value dedup in tests/unit/test_fetcher.py (TestMergeContacts) and tests/unit/test_contact.py: raw `06 40278235` + `0640278235` (same canonical number, different formatting) collapse to one; case-variant emails collapse; genuinely distinct numbers/emails are preserved
 
 ---
 
@@ -163,6 +173,7 @@ duplicates were not merged.
 - T009-T013 (REDO tasks) can run in parallel (distinct files)
 - T016-T018 (unit tests) can run in parallel
 - T020 (US2) can start as soon as T010 is complete
+- T035/T036 (multi-value dedup) can run in parallel (implementation vs. test file); T035 must land before the dedup behavior is verified
 
 ---
 

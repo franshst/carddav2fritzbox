@@ -195,14 +195,36 @@ class Contact:
         """Add an email address to the contact."""
         self.emails.append(email)
 
-    def merge_with(self, other: "Contact") -> "Contact":
+    def merge_with(
+        self,
+        other: "Contact",
+        country_code: str = "",
+        area_code: str = "",
+        international_access_code: str = "",
+    ) -> "Contact":
         """Merge another contact into this one, following merge rules:
         - Name: Kept from this contact (canonical)
-        - Multi-fields (phones, emails): Appended
+        - Multi-fields (phones, emails): Appended only when unique; identical
+          values are kept once (first occurrence wins, FR-004). Telephone
+          numbers are compared in their canonical normalized form (FR-018),
+          email addresses case-insensitively.
         - Single-fields (picture): Kept from this contact
         """
-        self.phone_numbers.extend(other.phone_numbers)
-        self.emails.extend(other.emails)
+        existing_phones = self._canonical_phone_set(
+            country_code, area_code, international_access_code
+        )
+        for phone in other.phone_numbers:
+            key = phone.canonical(country_code, area_code, international_access_code)
+            if key and key not in existing_phones:
+                self.phone_numbers.append(phone)
+                existing_phones.add(key)
+
+        existing_emails = {email.email.casefold() for email in self.emails}
+        for email in other.emails:
+            key = email.email.casefold()
+            if key not in existing_emails:
+                self.emails.append(email)
+                existing_emails.add(key)
         return self
 
     def is_duplicate_of(
