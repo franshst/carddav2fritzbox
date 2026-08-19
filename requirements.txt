@@ -1,7 +1,7 @@
 requests>=2.28.0
-caldav>=1.0.0
 vobject>=0.9.6
 Pillow>=9.0.0
 pytest>=7.0.0
 flake8>=5.0.0
 black>=22.0.0
+isort>=5.0.0

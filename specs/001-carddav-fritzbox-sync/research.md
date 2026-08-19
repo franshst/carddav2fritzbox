@@ -8,10 +8,11 @@
 | FritzBox HTTP API | T004 | **Completed** | Multipart POST to `/cgi-bin/firmwarecfg` for full phonebook overwrite / mirror sync. |
 | FritzBox TR-064 API | T004 | **Completed** | SOAP service `X_AVM-DE_OnTel:1` (`GetPhonebookList`, `GetPhonebook`) available for reading/metadata. |
 | FritzBox XML Schema | T004 | **Completed** | Hierarchy: `<phonebooks><phonebook><contact><person><realName>...</realName></person><telephony>...</telephony><services><email>...</email></services></contact></phonebook></phonebooks>`. |
-| CardDAV API | T001-T003 | Pending | Need to verify Python libraries (`vobject`, `caldav`, or `requests`) for standard CardDAV fetching. |
+| CardDAV API | T001-T003 | **Completed** | **Use `requests` + `vobject`.** The `caldav` library is CalDAV-only (no `AddressBook`/`AddressObject` support) and was removed. RFC 6352 PROPFIND/REPORT implemented directly over `requests`. |
 | Supported Fields | T005 | **Completed** | Mapped vCard fields (FN/N, TEL types, EMAIL classifiers, PHOTO, VIP) to FritzBox XML. |
 | Image Conversion | T006 | **Completed** | Pipeline: Base64/PNG decode -> Pillow RGB conversion -> Baseline JPEG 300x300. |
-| Data Representation | T007 | Pending | Design a Python dataclass or namedtuple for intermediate representation. |
+| Data Representation | T007 | **Completed** | Python dataclasses (`Contact`, `PhoneNumber`, `EmailAddress`) in `src/models/contact.py`. |
+| Tech Stack Assessment | T008 | **Completed** | Verified all dependencies against the constitution. Stack is sufficient with two adaptations: drop `caldav`, add `isort`. |
 
 ---
 
@@ -237,3 +238,56 @@ def convert_vcard_photo_to_jpg(photo_data: str, is_base64: bool = True) -> bytes
 ### 7.4 Fallback Strategy & Exception Handling
 - **Missing or Corrupted Images**: If `PHOTO` parsing, Base64 decoding, or `Pillow` processing encounters an error, log a warning to `stderr` and omit `<imageURL>` (leave as empty string `<imageURL></imageURL>`).
 - **Graceful Failure**: Non-interactive execution must never fail due to an invalid avatar image format.
+
+---
+
+## 8. Tech Stack Assessment & CardDAV Fetching Decision (T008)
+
+### 8.1 Assessment Result
+The current stack is **sufficient with two adaptations**. Full inventory of what is already in the project venv (Python 3.13):
+
+| Component | Tool | Verdict | Justification |
+|---|---|---|---|
+| Language | Python 3.13 | **Keep** | Modern syntax, stdlib-first, matches constitution VI. |
+| HTTP client | `requests` | **Keep** | Minimal, battle-tested; used by both CardDAV fetch and FritzBox upload. |
+| vCard parsing | `vobject` | **Keep** | Handles RFC 6350 parsing; avoids hand-rolling fragile line-fold parsing. |
+| CardDAV protocol | `caldav` | **REMOVE** | Verified in installed 3.2.1: API exposes `Calendar`/`Event`/`Todo` only. There is no `AddressBook`/`AddressObject`/`addressbook-home-set` support (RFC 6352). It is a CalDAV library, not a CardDAV one. |
+| Image conversion | `Pillow` | **Keep** | Required for baseline-JPEG + 300x300 resizing; stdlib cannot encode JPEG. |
+| Config parsing | stdlib `configparser` | **Keep** | Constitution I/III; INI format already established. |
+| XML | stdlib `xml.etree.ElementTree` + `minidom` | **Keep** | FritzBox XML schema is simple; stdlib suffices. |
+| Logging | stdlib `logging` | **Keep** | stderr-based, cron-friendly. |
+| Testing | `pytest` + `flake8` + `black` | **Keep** | Already configured in `pyproject.toml`; `isort` added for consistency with its config block. |
+
+### 8.2 Decision: Replace `caldav` with direct `requests` + `vobject`
+
+- **Decision**: Fetch CardDAV address books directly over RFC 6352 using `requests` (Basic Auth) and parse the returned vCards with `vobject`. Remove the `caldav` dependency.
+- **Rationale**:
+  - `caldav` does not implement CardDAV address-book resources; relying on it would require undocumented internal APIs (constitution IV violation).
+  - The CardDAV protocol surface needed is small and stable: `PROPFIND` for discovery (`addressbook-home-set`, `resourcetype` = `addressbook`) plus one `REPORT` (`addressbook-query` or `sync-collection`) returning `text/vcard`. This is exactly "Public APIs Only" (RFC 6352 is an open IETF standard).
+  - Removing a non-functional dependency is the minimal-dependency outcome (constitution III).
+- **Alternatives considered**:
+  - `caldav` library: rejected — CalDAV-only, no RFC 6352 support.
+  - Dedicated CardDAV packages (e.g., `vcards`, `pycarddav`): rejected — unmaintained or thin wrappers over `requests` with extra API surface for no benefit.
+  - Hand-rolled vCard parsing with `requests` only: rejected — `vobject` already provides correct, tested RFC 6350 parsing.
+
+### 8.3 CardDAV Fetch Flow (reference implementation pattern)
+```python
+import requests
+from vobject import vCard
+
+def discover_addressbooks(base_url: str, user: str, password: str) -> list[str]:
+    # 1. Resolve home set: GET /.well-known/carddav (RFC 6764) or PROPFIND on base
+    # 2. PROPFIND home set for resourcetype: addressbook
+    # 3. Return list of addressbook collection hrefs
+
+def fetch_vcards(addrbook_url: str, user: str, password: str) -> list[vCard]:
+    # REPORT with <addressbook-query> / <sync-collection>, body asks for address-data
+    # Parse each vCard 3.0/4.0 response body with vobject
+```
+
+Notes: Nextcloud exposes CardDAV under `/remote.php/dav/addressbooks/users/<user>/` and supports Basic Auth; `requests` handles auth, redirects, and TLS automatically (FritzBox uses plain HTTP on the LAN, so no cert handling is needed there).
+
+### 8.4 Configuration Schema Adaptation
+The clarified spec (Session 2026-08-19) requires `country_code` and `area_code` to be mandatory and adds the international access code. Config changes:
+- Rename `region_code` → `area_code` (no hardcoded `+49`/`30` defaults; validation must fail if missing — FR-017).
+- Add `international_access_code` (e.g., `00` Europe, `09` US) used during normalization (FR-005 step 3).

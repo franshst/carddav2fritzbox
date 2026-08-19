@@ -1,191 +1,293 @@
-"""Main entry point for CardDAV to FritzBox sync CLI utility.
+"""Main entry point for CardDAV to FritzBox sync utility.
 
-This module serves as the command-line interface for the CardDAV to FritzBox
-Sync utility, coordinating the entire sync process from configuration loading
-to contact synchronization and reporting.
+This module provides the command-line interface for the sync utility,
+handling argument parsing, configuration loading, and orchestrating the
+complete sync workflow.
+
+Key features:
+- Command-line argument parsing with comprehensive options
+- Configuration file loading with validation
+- Integration with all core services (fetcher, converter, uploader)
+- Comprehensive logging and error handling
+- Non-interactive execution suitable for cron jobs
+- Progress reporting for monitoring
+- Graceful failure handling with informative error messages
 """
 
+import argparse
+import logging
 import sys
 from typing import Optional
 
 from src.config.loader import load_config, print_config_summary
 from src.services.carddav_fetcher import CardDAVFetcher
-from src.services.converter import ContactConverter
+from src.services.converter import (
+    PhoneNumberNormalizer,
+    ImageConverter,
+    extract_phone_number_info,
+    process_contact_photos,
+    validate_and_normalize_contact,
+)
 from src.services.fritzbox_uploader import FritzBoxUploader
-from src.utils.logger import setup_logger, log_error_and_exit
+from src.utils.logger import setup_logger
 
 
-def main() -> None:
-    """Main CLI entry point.
-
-    The execution flow is:
-    1. Parse command-line arguments for config file
-    2. Load and validate configuration
-    3. Setup logging
-    4. Initialize services with configuration
-    5. Execute sync process
-    6. Report results and handle errors
-    """
-    config_path = _parse_cli_args()
-
-    try:
-        logger = _setup_logging()
-
-        logger.info("Starting CardDAV to FritzBox sync")
-
-        config = _load_and_validate_config(config_path)
-        print_config_summary(config)
-
-        sync_services = _initialize_services(config)
-
-        sync_result = _execute_sync_process(sync_services, logger)
-
-        _report_sync_result(sync_result, logger)
-
-    except Exception as e:
-        logger.error(f"Sync failed: {e}")
-        sys.exit(1)
-
-    logger.info("Sync completed successfully")
-
-
-def _parse_cli_args() -> str:
+def parse_arguments():
     """Parse command-line arguments.
 
     Returns:
-        Configuration file path
+        Parsed arguments namespace
     """
-    if len(sys.argv) != 2 or sys.argv[1] != "--config":
-        print("Usage: python3 src/main.py --config config.ini")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="CardDAV to FritzBox Sync Utility",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py --config config.ini
+  python main.py --config /path/to/config.conf --log-level DEBUG
 
-    config_path = sys.argv[2] if len(sys.argv) > 2 else "config.ini"
-    return config_path
+The configuration file (INI format) should contain:
+  - FritzBox connection details
+  - CardDAV source credentials
+  - Regional settings for phone number normalization
+        """
+    )
+
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="Path to INI configuration file"
+    )
+
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Logging level (default: INFO)"
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate configuration and show what would be synced, but don't actually sync"
+    )
+
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate configuration and exit without running sync"
+    )
+
+    return parser.parse_args()
 
 
-def _setup_logging():
-    """Setup logging system.
-
-    Returns:
-        Configured logger instance
-    """
-    return setup_logger()
-
-
-def _load_and_validate_config(config_path: str):
-    """Load and validate configuration.
+def load_and_validate_config(config_path: str) -> Optional[object]:
+    """Load and validate configuration file.
 
     Args:
         config_path: Path to configuration file
 
     Returns:
-        Loaded configuration object
-
-    Raises:
-        Exception: If configuration loading or validation fails
+        Loaded configuration object, or None if validation fails
     """
-    config = load_config(config_path)
-    print(f"Configuration loaded successfully from: {config_path}")
-    return config
+    try:
+        config = load_config(config_path)
+        print_config_summary(config)
+        return config
+    except Exception as e:
+        print(f"Error loading configuration: {e}", file=sys.stderr)
+        return None
 
 
-def _initialize_services(config):
-    """Initialize all required services.
+def run_sync(config, dry_run: bool = False) -> bool:
+    """Run the complete CardDAV to FritzBox sync process.
 
     Args:
         config: Loaded configuration object
+        dry_run: If True, only validate without actually syncing
 
     Returns:
-        Dictionary of initialized services
+        True if sync completes successfully, False otherwise
     """
-    logger = setup_logger()
-
-    carddav_fetcher = CardDAVFetcher(config, logger)
-    converter = ContactConverter(config, logger)
-    fritzbox_uploader = FritzBoxUploader(config, logger)
-
-    return {
-        "carddav_fetcher": carddav_fetcher,
-        "converter": converter,
-        "fritzbox_uploader": fritzbox_uploader,
-        "logger": logger,
-    }
-
-
-def _execute_sync_process(services, logger):
-    """Execute the complete sync process.
-
-    Args:
-        services: Dictionary of initialized services
-        logger: Logger instance
-
-    Returns:
-        Dictionary with sync results
-    """
-    carddav_fetcher = services["carddav_fetcher"]
-    converter = services["converter"]
-    fritzbox_uploader = services["fritzbox_uploader"]
-
     try:
-        # Step 1: Fetch contacts from CardDAV sources
-        raw_contacts = carddav_fetcher.fetch_all_contacts()
-        logger.info(f"Fetched {len(raw_contacts)} contacts from CardDAV sources")
+        # Setup logger
+        logger = setup_logger("carddav_sync", log_level="INFO")
+        logger.info("Starting CardDAV to FritzBox sync process")
 
-        # Step 2: Convert and normalize contacts
-        normalized_contacts = converter.convert_to_standard_format(raw_contacts)
-        logger.info(f"Normalized {len(normalized_contacts)} contacts")
+        # Initialize services
+        logger.info("Initializing CardDAV fetcher...")
+        fetcher = CardDAVFetcher(config, logger)
 
-        # Step 3: Merge duplicate contacts
-        merged_contacts = converter.merge_contacts(normalized_contacts)
-        logger.info(f"Merged {len(merged_contacts)} contacts (removed duplicates)")
+        logger.info("Initializing image converter...")
+        converter = ImageConverter(logger)
 
-        # Step 4: Upload to FritzBox
-        upload_result = fritzbox_uploader.upload_contacts(merged_contacts)
+        logger.info("Initializing FritzBox uploader...")
+        uploader = FritzBoxUploader(config.fritzbox, logger)
 
-        return {
-            "success": True,
-            "total_fetched": len(raw_contacts),
-            "total_normalized": len(normalized_contacts),
-            "total_merged": len(merged_contacts),
-            "upload_result": upload_result,
-        }
+        # Test FritzBox connection
+        logger.info("Testing FritzBox connection...")
+        if not uploader.test_connection():
+            logger.error("Failed to connect to FritzBox")
+            return False
+
+        # Fetch contacts from CardDAV sources
+        logger.info("Fetching contacts from CardDAV sources...")
+        contacts = fetcher.fetch_and_parse_contacts()
+
+        if not contacts:
+            logger.warning("No contacts found in CardDAV sources")
+            return True
+
+        logger.info(f"Fetched {len(contacts)} contacts")
+
+        # Process and normalize contacts
+        logger.info("Processing and normalizing contacts...")
+        normalized_contacts = []
+        normalizer = PhoneNumberNormalizer(
+            country_code=config.regional.country_code,
+            region_code=config.regional.region_code
+        )
+
+        for i, contact in enumerate(contacts):
+            # Process photo
+            contact = process_contact_photos(contact, converter)
+
+            # Extract phone number info if needed
+            for phone in contact.phone_numbers:
+                # This is handled during Contact parsing
+
+            # Validate and normalize contact
+            validated_contact = validate_and_normalize_contact(contact, normalizer)
+            normalized_contacts.append(validated_contact)
+
+            logger.info(f"Processed contact {i + 1}/{len(contacts)}: {validated_contact.name}")
+
+        if dry_run:
+            logger.info("Dry run mode - showing contact summary:")
+            for contact in normalized_contacts:
+                print(f"  - {contact.name}: {len(contact.phone_numbers)} phones, {len(contact.emails)} emails")
+            logger.info("Dry run completed successfully")
+            return True
+
+        # Upload contacts to FritzBox
+        logger.info("Uploading contacts to FritzBox...")
+        success = uploader.upload_phonebook(
+            normalized_contacts,
+            config.fritzbox.target_book,
+            phonebook_id=0  # Default to first phonebook
+        )
+
+        if success:
+            logger.info("Sync process completed successfully")
+            return True
+        else:
+            logger.error("Sync process failed")
+            return False
 
     except Exception as e:
-        logger.error(f"Sync process failed: {e}")
-        raise
+        logger.error(f"Unexpected error during sync: {e}")
+        return False
 
 
-def _report_sync_result(sync_result, logger):
-    """Report sync results to user.
+def print_help_and_exit():
+    """Print help information and exit."""
+    help_text = """
+CardDAV to FritzBox Sync Utility
+================================
 
-    Args:
-        sync_result: Dictionary with sync results
-        logger: Logger instance
+This utility synchronizes contacts from multiple CardDAV sources to a FritzBox device.
+
+Usage:
+  python main.py --config config.ini
+
+Configuration file requirements:
+  - [general] section with name_order setting
+  - [fritzbox] section with connection details
+  - [regional] section with country/region codes
+  - Multiple [source_X] sections for CardDAV sources
+
+Example configuration:
+
+[general]
+name_order = first_name_first
+
+[fritzbox]
+url = https://fritz.box
+username = your_username
+password = your_password
+target_book = CardDAV Sync
+country = DE
+region = DE
+country_code = +49
+region_code = 30
+
+[regional]
+country_code = +49
+region_code = 30
+
+source_1
+url = https://nextcloud.example.com
+username = user1
+password = pass1
+priority = 1
+
+source_2
+url = https://caldav.example.com
+username = user2
+password = pass2
+priority = 2
+
+Commands:
+  --config PATH      Path to configuration file (required)
+  --log-level LEVEL  Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  --dry-run          Show what would be synced without actually doing it
+  --validate-only    Validate configuration and exit
+
+Exit codes:
+  0 - Success
+  1 - Configuration error
+  2 - Connection error
+  3 - Sync error
+  4 - General error
     """
-    if sync_result["success"]:
-        print("\n" + "=" * 60)
-        print("SYNC COMPLETED SUCCESSFULLY")
-        print("=" * 60)
-        print(f"  Total Contacts Fetched:     {sync_result['total_fetched']}")
-        print(f"  Total Contacts Normalized:  {sync_result['total_normalized']}")
-        print(f"  Total Contacts Merged:      {sync_result['total_merged']}")
+    print(help_text)
+    sys.exit(1)
 
-        upload_result = sync_result["upload_result"]
-        if upload_result["success"]:
-            print(f"  Contacts Uploaded:          {upload_result.get('uploaded_count', 0)}")
-            print(f"  Contacts Deleted:           {upload_result.get('deleted_count', 0)}")
-            print(f"  Upload Time:                {upload_result.get('upload_time_seconds', 0):.2f}s")
+
+def main():
+    """Main entry point for the sync utility."""
+    args = parse_arguments()
+
+    # Setup logging early for error reporting
+    logger = setup_logger("carddav_sync", log_level=args.log_level)
+
+    logger.info("CardDAV to FritzBox Sync Utility starting")
+    logger.info(f"Config file: {args.config}")
+
+    # Load and validate configuration
+    if args.validate_only:
+        config = load_and_validate_config(args.config)
+        if config:
+            print("✓ Configuration is valid")
+            return 0
         else:
-            print(f"  Upload Failed:              {upload_result.get('error', 'Unknown error')}")
+            print("✗ Configuration validation failed", file=sys.stderr)
+            return 1
 
-        print("=" * 60)
-        print("\nSync completed successfully! The specified FritzBox address book has been updated.")
-        print("You can verify the results in your FritzBox address book.")
+    config = load_and_validate_config(args.config)
+    if not config:
+        return 1
 
+    # Run sync process
+    success = run_sync(config, dry_run=args.dry_run)
+
+    if success:
+        logger.info("Sync completed successfully")
+        return 0
     else:
-        print(f"\nERROR: Sync failed - {sync_result.get('error', 'Unknown error')}")
-        sys.exit(1)
+        logger.error("Sync failed")
+        return 3
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

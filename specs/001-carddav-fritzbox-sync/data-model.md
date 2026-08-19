@@ -8,7 +8,7 @@ from typing import List, Optional
 
 @dataclass
 class PhoneNumber:
-    number: str           # Cleaned / normalized telephone number string
+    number: str           # Canonical normalized form: digits only, optional leading '+'
     type: str = "home"    # "home", "mobile", "work", "fax"
     prio: int = 0         # 1 for primary number, 0 for secondary numbers
     quickdial: str = ""   # 2-digit quickdial string (e.g. "01")
@@ -37,13 +37,16 @@ class Contact:
 
 ## Mapping & Validation Rules
 
-- **Identity**: `(name, normalized_phone_or_email)` uniquely identifies a contact for merging.
+- **Identity**: `(name, normalized_phone_or_email)` uniquely identifies a contact for merging; phones are compared using the canonical normalized form.
 - **Name Formatting**:
   - Structured vCard `N` property (`FamilyName;GivenName;...`) and `FN` are parsed.
   - Reconstructed according to `Config.name_order`:
     - `first_name_first` (Default): `"GivenName FamilyName"` (e.g. *"John Doe"*)
     - `last_name_first`: `"FamilyName, GivenName"` (e.g. *"Doe, John"*)
-- **Normalization**: Strip non-numeric chars from phones, add country/region codes if international.
+- **Number Handling (three-stage model)**:
+  - *Normalize*: Sanitize (strip non-numerics, keep leading `+`), then convert to the canonical form (`+` country code + number) per the algorithm in spec.md FR-005. Numbers that cannot be normalized are skipped with a warning (spec.md FR-019).
+  - *Compare*: Contact identity and deduplication always use the canonical normalized form (spec.md FR-018).
+  - *Shorten*: At FritzBox export, local numbers (book's configured country code) are shortened by removing `+` and the country code, prepending `0`, and dropping the area code when it equals the configured area code; international numbers are stored in canonical form (spec.md FR-006).
 - **Merge**:
   - Name: Taken from first source (canonical).
   - Multi-fields (phones, emails): Appended.

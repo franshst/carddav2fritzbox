@@ -13,9 +13,10 @@ class PhoneNumber:
     quickdial: str = ""
     vanity: str = ""
 
-    def normalize(self) -> None:
+    def normalize(self) -> "PhoneNumber":
         """Normalize phone number by stripping non-numeric characters except leading '+'."""
         self.number = re.sub(r'[^0-9+]', '', self.number)
+        return self
 
     def is_primary(self) -> bool:
         """Check if this is the primary phone number."""
