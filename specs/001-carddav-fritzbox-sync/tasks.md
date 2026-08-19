@@ -125,6 +125,16 @@ E.164 without `+`) was mangled to `+312031703141414`.
 - [x] T030 Re-verify on the real device: `--validate-only` + `--dry-run` exit 0; real upload goes into the book named `target_book` with shortened numbers and the ANWB number intact. Verified: book "Test" (index 1, real id 2) holds the contacts, ANWB `0703141414` + `0882692888` present, numbers shortened. Also confirmed the box silently drops numberless contacts on import (probe book test); uploader now skips them with a warning so the reported count matches the box (see T031)
 - [x] T031 Skip contacts without a phone number in `FritzBoxUploader.upload_phonebook` with a warning (the FritzBox import silently drops them); test in tests/unit/test_fritzbox_auth.py
 
+Bugs found in the T030 re-verification: shortening stripped the area code from
+local numbers (Amsta `020-448-6970` became the non-dialable `04486970`), the
+fetcher dropped roughly a third of the contacts (vCard line folding was
+destroyed, so cards with photos/base64 were rejected), and cross-source
+duplicates were not merged.
+
+- [x] T032 Fix FR-006 shortening: `PhoneNumberNormalizer.shorten` keeps the area code (it must always be dialed, e.g. in the Netherlands); amend spec.md FR-006 + data-model.md; regression test `020-448-6970` -> `0204486970` in tests/unit/test_converter.py
+- [x] T033 Fix vCard line folding: `CardDAVFetcher._split_vcards` preserves line endings and continuation whitespace so vobject can unfold folded lines (RFC 6350 §3.2); tests in tests/unit/test_fetcher.py
+- [x] T034 Wire FR-004 merging: `CardDAVFetcher.merge_contacts` collapses cross-source duplicates by identity (priority-1 wins, multi-value fields appended) and `src/main.py` calls it after fetch; tests in tests/unit/test_fetcher.py
+
 ---
 
 ## Dependencies & Execution Order

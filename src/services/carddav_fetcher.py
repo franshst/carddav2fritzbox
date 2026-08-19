@@ -328,16 +328,23 @@ class CardDAVFetcher:
 
     @staticmethod
     def _split_vcards(text: str) -> List[str]:
-        """Split a body of concatenated vCards into individual vCard texts."""
+        """Split a body of concatenated vCards into individual vCard texts.
+
+        Line endings and leading whitespace are preserved so vCard line folding
+        (RFC 6350 §3.2) stays intact when each card is parsed by vobject. The
+        old version stripped lines, which destroyed folded continuation lines
+        and made vobject reject the whole card (e.g. contacts with photos).
+        """
         cards = []
         current = None
         for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if line.upper().startswith("BEGIN:VCARD"):
+            line = raw_line.rstrip("\r")
+            upper = line.strip().upper()
+            if upper.startswith("BEGIN:VCARD"):
                 current = [line]
             elif current is not None:
                 current.append(line)
-                if line.upper().startswith("END:VCARD"):
+                if upper.startswith("END:VCARD"):
                     cards.append("\n".join(current))
                     current = None
         if current is not None:
@@ -646,6 +653,47 @@ class CardDAVFetcher:
             f"Successfully parsed {len(parsed_contacts)} contacts from vCard data"
         )
         return parsed_contacts
+
+    def merge_contacts(self, contacts: List[Contact]) -> List[Contact]:
+        """Merge duplicate contacts from different sources by identity (FR-004).
+
+        Sources are fetched in priority order, so the first encounter of an
+        identity wins; multi-value fields (phones, emails) from later sources
+        are appended to it (FR-004/FR-013). Identity uses the canonical
+        normalized phone/email form (FR-018).
+
+        Args:
+            contacts: Parsed contact objects from one or more sources.
+
+        Returns:
+            Contacts with cross-source duplicates merged into one entry.
+        """
+        regional = self.config.regional
+        merged: List[Contact] = []
+        for contact in contacts:
+            existing_idx = next(
+                (
+                    i
+                    for i, existing in enumerate(merged)
+                    if existing.is_duplicate_of(
+                        contact,
+                        self.config.general.name_order,
+                        regional.country_code,
+                        regional.area_code,
+                        regional.international_access_code,
+                    )
+                ),
+                None,
+            )
+            if existing_idx is None:
+                merged.append(contact)
+            else:
+                merged[existing_idx].merge_with(contact)
+
+        self.logger.info(
+            f"Merged {len(contacts)} contacts into {len(merged)} unique contacts"
+        )
+        return merged
 
     def _extract_source_priority_from_url(self, url: str) -> int:
         """Extract source priority from CardDAV URL.

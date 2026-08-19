@@ -431,7 +431,7 @@ class TestExportShortening:
         uploader = _make_uploader()
         uploader.normalizer = PhoneNumberNormalizer("+49", "30", "00")
         xml = self._xml_for(uploader, "+4930123456")
-        assert "0123456" in xml
+        assert "030123456" in xml
         assert "+4930123456" not in xml
 
     def test_keeps_foreign_number_canonical(self):

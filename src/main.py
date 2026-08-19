@@ -149,6 +149,10 @@ def run_sync(config, dry_run: bool = False) -> bool:
 
         logger.info(f"Fetched {len(contacts)} contacts")
 
+        # Merge duplicate contacts across sources by identity (FR-004/FR-018)
+        logger.info("Merging duplicate contacts across sources...")
+        contacts = fetcher.merge_contacts(contacts)
+
         # Process and normalize contacts
         logger.info("Processing and normalizing contacts...")
         normalized_contacts = []
