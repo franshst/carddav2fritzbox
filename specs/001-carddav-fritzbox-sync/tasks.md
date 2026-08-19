@@ -131,7 +131,7 @@ fetcher dropped roughly a third of the contacts (vCard line folding was
 destroyed, so cards with photos/base64 were rejected), and cross-source
 duplicates were not merged.
 
-- [x] T032 Fix FR-006 shortening: `PhoneNumberNormalizer.shorten` keeps the area code (it must always be dialed, e.g. in the Netherlands); amend spec.md FR-006 + data-model.md; regression test `020-448-6970` -> `0204486970` in tests/unit/test_converter.py
+- [x] T032 Fix FR-006 shortening: `PhoneNumberNormalizer.shorten` keeps the area code for foreign-area local numbers but removes it together with the trunk `0` when it equals the configured area code (the area code is not dialed within the same area, e.g. in the Netherlands), leaving the bare subscriber number; amend spec.md FR-006 + data-model.md; regression test `020-448-6970` -> `4486970` in tests/unit/test_converter.py
 - [x] T033 Fix vCard line folding: `CardDAVFetcher._split_vcards` preserves line endings and continuation whitespace so vobject can unfold folded lines (RFC 6350 §3.2); tests in tests/unit/test_fetcher.py
 - [x] T034 Wire FR-004 merging: `CardDAVFetcher.merge_contacts` collapses cross-source duplicates by identity (priority-1 wins, multi-value fields appended) and `src/main.py` calls it after fetch; tests in tests/unit/test_fetcher.py
 

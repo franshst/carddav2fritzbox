@@ -46,7 +46,7 @@ class Contact:
 - **Number Handling (three-stage model)**:
   - *Normalize*: Sanitize (strip non-numerics, keep leading `+`), then convert to the canonical form (`+` country code + number) per the algorithm in spec.md FR-005. Numbers that cannot be normalized are skipped with a warning (spec.md FR-019).
   - *Compare*: Contact identity and deduplication always use the canonical normalized form (spec.md FR-018).
-  - *Shorten*: At FritzBox export, local numbers (book's configured country code) are shortened by removing `+` and the country code and prepending `0`, keeping the area code (it is always dialed, e.g. in the Netherlands); international numbers are stored in canonical form (spec.md FR-006).
+  - *Shorten*: At FritzBox export, local numbers (book's configured country code) are shortened by removing `+` and the country code and prepending `0`; when the area code equals the configured one it is removed together with the trunk `0` (not dialed within the same area), leaving the bare subscriber number; international numbers are stored in canonical form (spec.md FR-006).
 - **Merge**:
   - Name: Taken from first source (canonical).
   - Multi-fields (phones, emails): Appended.

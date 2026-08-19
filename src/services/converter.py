@@ -25,9 +25,10 @@ class PhoneNumberNormalizer:
     - *Normalize* (FR-005): sanitize (FR-014) then convert to the canonical
       form (``+`` country code + number) via :func:`canonicalize_phone`.
     - *Shorten* (FR-006): at FritzBox export, local numbers (book's configured
-      country code) lose the ``+`` and country code and gain a leading ``0``;
-      the area code is kept because it must always be dialed (e.g. in the
-      Netherlands). Numbers from other countries are kept in canonical form.
+      country code) lose the ``+`` and country code. In the book's own area code
+      they are stored as the bare subscriber number (trunk ``0`` and area code
+      are not dialed within the same area); other local numbers gain a leading
+      ``0`` and keep their area code. Foreign numbers stay in canonical form.
     """
 
     def __init__(
@@ -73,9 +74,10 @@ class PhoneNumberNormalizer:
         """Shorten a canonical phone number for the FritzBox book (FR-006).
 
         Foreign-country numbers are kept in canonical form. Local numbers lose
-        the ``+`` and country code and gain a leading ``0``. The area code is
-        always kept: in the book's country (e.g. the Netherlands) the area code
-        must be dialed for every landline call, so it is not dropped.
+        the ``+`` and country code. Numbers in the book's own area code are
+        stored as the bare subscriber number (the trunk ``0`` and the area code
+        are not dialed within the same area, e.g. in the Netherlands); other
+        local numbers gain a leading ``0`` and keep their area code.
         """
         digits = self.sanitize(phone_number)
         if not digits.startswith("+"):
@@ -86,6 +88,9 @@ class PhoneNumberNormalizer:
             return digits
 
         national = digits[len(country_digits) + 1 :]
+        area_digits = re.sub(r"[^0-9]", "", self.area_code).lstrip("0")
+        if area_digits and national.startswith(area_digits):
+            return national[len(area_digits) :]
         return "0" + national
 
     def format_for_fritzbox(self, phone_number: str) -> str:

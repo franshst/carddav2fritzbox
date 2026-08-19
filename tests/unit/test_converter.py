@@ -42,11 +42,11 @@ class TestPhoneNumberNormalizer:
         assert result == "+49301234567"
 
     def test_format_for_fritzbox_with_plus(self):
-        """Test shortening for FritzBox (FR-006): local number drops +/CC, keeps
-        the area code."""
+        """Test shortening for FritzBox (FR-006): local number drops +/CC and its own
+        area code, leaving the bare subscriber number."""
         normalizer = PhoneNumberNormalizer("+49", "30")
         result = normalizer.format_for_fritzbox("+4930123467")
-        assert result == "030123467"
+        assert result == "123467"
 
     def test_format_for_fritzbox_without_plus(self):
         """Test formatting for FritzBox adds country code if needed."""
@@ -147,10 +147,11 @@ class TestPhoneNumberNormalizer:
 
     # --- FR-006 FritzBox shortening ---
 
-    def test_shorten_local_keeps_area_code(self):
-        """Test dropping + and country code while keeping the area code (FR-006)."""
+    def test_shorten_local_same_area(self):
+        """Numbers in the book's own area code become the bare subscriber number
+        (the trunk 0 and area code are not dialed within the same area)."""
         normalizer = PhoneNumberNormalizer("+49", "30", "00")
-        assert normalizer.shorten("+4930123456") == "030123456"
+        assert normalizer.shorten("+4930123456") == "123456"
 
     def test_shorten_local_different_area(self):
         """Test keeping the area code when it differs from the configured one."""
@@ -162,12 +163,13 @@ class TestPhoneNumberNormalizer:
         normalizer = PhoneNumberNormalizer("+49", "30", "00")
         assert normalizer.shorten("+491512345678") == "01512345678"
 
-    def test_shorten_nl_keeps_area_code(self):
-        """NL regression: '020-448-6970' must shorten to '0204486970', not
-        drop the '20' and become the non-dialable '04486970'."""
+    def test_shorten_nl_bare_subscriber_number(self):
+        """NL regression: '020-448-6970' canonicalizes to '+31204486970' and
+        shortens to the bare subscriber number '4486970' (the trunk 0 and area
+        code are not dialed within the same area)."""
         normalizer = PhoneNumberNormalizer("+31", "20", "00")
         assert normalizer.normalize("020-448-6970") == "+31204486970"
-        assert normalizer.shorten("+31204486970") == "0204486970"
+        assert normalizer.shorten("+31204486970") == "4486970"
 
     def test_shorten_foreign_number_kept_canonical(self):
         """Test that a foreign number stays in canonical form (FR-006)."""
@@ -182,7 +184,7 @@ class TestPhoneNumberNormalizer:
     def test_format_for_fritzbox_uses_shorten(self):
         """Test that format_for_fritzbox is the export-time shortening step."""
         normalizer = PhoneNumberNormalizer("+49", "30", "00")
-        assert normalizer.format_for_fritzbox("+4930123456") == "030123456"
+        assert normalizer.format_for_fritzbox("+4930123456") == "123456"
 
 
 class TestImageConverter:
