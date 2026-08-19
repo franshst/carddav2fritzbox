@@ -14,9 +14,53 @@ class PhoneNumber:
     vanity: str = ""
 
     def normalize(self) -> "PhoneNumber":
-        """Normalize phone number by stripping non-numeric characters except leading '+'."""
-        self.number = re.sub(r'[^0-9+]', '', self.number)
+        """Normalize phone number by stripping non-numeric characters except
+        a leading '+'.
+        """
+        self.number = re.sub(r"[^0-9+]", "", self.number)
         return self
+
+    def sanitize(self) -> str:
+        """Sanitize a phone number: keep only digits and an optional leading '+'."""
+        return re.sub(r"[^0-9+]", "", self.number)
+
+    def canonical(
+        self,
+        country_code: str = "",
+        area_code: str = "",
+        international_access_code: str = "",
+    ) -> str:
+        """Return the canonical normalized form of this number (spec.md FR-005).
+
+        Canonical form contains only digits and a leading '+' (international
+        access sign). Algorithm:
+        1. If the number starts with '+', it is already canonical.
+        2. If it starts with the numeric international access code from config
+           (e.g. ``00`` Europe, ``09`` US), replace that code with '+'.
+        3. If it starts with '0', replace the leading '0' with '+' + country code.
+        4. Otherwise prepend '+' + country code + area code (without leading zero).
+
+        Without regional config, falls back to the sanitized form (numbers are
+        assumed to be stored in canonical form). Comparison of phone numbers for
+        identity/deduplication always uses this form (spec.md FR-018).
+        """
+        digits = self.sanitize()
+        if not digits or digits.startswith("+"):
+            return digits
+
+        country_digits = re.sub(r"[^0-9]", "", country_code)
+        if not country_digits:
+            return digits
+
+        access_digits = re.sub(r"[^0-9]", "", international_access_code)
+        if access_digits and digits.startswith(access_digits):
+            return "+" + digits[len(access_digits) :]
+
+        if digits.startswith("0"):
+            return "+" + country_digits + digits[1:]
+
+        area_digits = re.sub(r"[^0-9]", "", area_code).lstrip("0")
+        return "+" + country_digits + area_digits + digits
 
     def is_primary(self) -> bool:
         """Check if this is the primary phone number."""
@@ -31,7 +75,7 @@ class PhoneNumber:
         """Normalize a phone number string by stripping all non-numeric characters
         (preserving leading '+' for country/international detection).
         """
-        return re.sub(r'[^0-9+]', '', phone)
+        return re.sub(r"[^0-9+]", "", phone)
 
 
 @dataclass
@@ -59,27 +103,45 @@ class Contact:
     unique_id: Optional[int] = None
 
     def get_primary_phone(self) -> Optional[PhoneNumber]:
-        """Get the primary phone number (prio=1), or the first phone if none marked as primary."""
+        """Get the primary phone number (prio=1), or the first phone if none
+        is marked as primary.
+        """
         for phone in self.phone_numbers:
             if phone.is_primary():
                 return phone
         return self.phone_numbers[0] if self.phone_numbers else None
 
     def get_primary_email(self) -> Optional[EmailAddress]:
-        """Get the primary email address (classifier=\"private\"), or the first email if none marked as primary."""
+        """Get the primary email address (classifier="private"), or the first
+        email if none is marked as primary.
+        """
         for email in self.emails:
             if email.is_primary():
                 return email
         return self.emails[0] if self.emails else None
 
-    def get_normalized_identity(self, name_order: str = "first_name_first") -> str:
-        """Get contact identity string for merging: formatted name plus primary phone or email."""
+    def get_normalized_identity(
+        self,
+        name_order: str = "first_name_first",
+        country_code: str = "",
+        area_code: str = "",
+        international_access_code: str = "",
+    ) -> str:
+        """Get contact identity string for merging: formatted name plus the
+        primary phone or email.
+
+        The phone number is compared in its canonical normalized form (FR-018).
+        """
         formatted_name = self._format_name(name_order)
         identity_parts = [formatted_name]
 
         primary_phone = self.get_primary_phone()
         if primary_phone:
-            identity_parts.append(primary_phone.number)
+            identity_parts.append(
+                primary_phone.canonical(
+                    country_code, area_code, international_access_code
+                )
+            )
         else:
             primary_email = self.get_primary_email()
             if primary_email:
@@ -114,18 +176,23 @@ class Contact:
         self.emails.extend(other.emails)
         return self
 
-    def is_duplicate_of(self, other: "Contact", name_order: str = "first_name_first") -> bool:
-        """Check if this contact is a duplicate of another contact for merging purposes.
-        A contact is considered identical when the name and either a (normalized)
-        telephone number or an email address matches.
+    def is_duplicate_of(
+        self,
+        other: "Contact",
+        name_order: str = "first_name_first",
+        country_code: str = "",
+        area_code: str = "",
+        international_access_code: str = "",
+    ) -> bool:
+        """Check if this contact is a duplicate of another contact for merging.
+
+        Per spec.md FR-004 and FR-018, a contact is identical when the name
+        matches AND either a canonical telephone number or an email address
+        matches.
         """
-        if self.name != other.name:
-            return False
-
-        self_normalized_identity = self.get_normalized_identity(name_order)
-        other_normalized_identity = other.get_normalized_identity(name_order)
-
-        return self_normalized_identity == other_normalized_identity
+        return self.has_same_identity(
+            other, country_code, area_code, international_access_code
+        )
 
     def get_all_phone_numbers(self) -> List[str]:
         """Get all phone numbers from the contact."""
@@ -135,10 +202,40 @@ class Contact:
         """Get all email addresses from the contact."""
         return [email.email for email in self.emails]
 
-    def has_same_identity(self, other: "Contact") -> bool:
-        """Check if two contacts have the same identity (name + primary phone/email)."""
-        return (self.name == other.name and
-                (self.get_primary_phone() and other.get_primary_phone() and
-                 self.get_primary_phone().number == other.get_primary_phone().number) or
-                (self.get_primary_email() and other.get_primary_email() and
-                 self.get_primary_email().email == other.get_primary_email().email))
+    def has_same_identity(
+        self,
+        other: "Contact",
+        country_code: str = "",
+        area_code: str = "",
+        international_access_code: str = "",
+    ) -> bool:
+        """Check if two contacts have the same identity.
+
+        True when the names match AND either any canonical telephone number is
+        shared (FR-018) or any email address is shared (FR-004).
+        """
+        if self.name != other.name:
+            return False
+
+        self_phones = self._canonical_phone_set(
+            country_code, area_code, international_access_code
+        )
+        other_phones = other._canonical_phone_set(
+            country_code, area_code, international_access_code
+        )
+        if self_phones & other_phones:
+            return True
+
+        self_emails = {email.email.casefold() for email in self.emails}
+        other_emails = {email.email.casefold() for email in other.emails}
+        return bool(self_emails & other_emails)
+
+    def _canonical_phone_set(
+        self, country_code: str, area_code: str, international_access_code: str
+    ) -> Set[str]:
+        """Set of this contact's phone numbers in canonical normalized form (FR-018)."""
+        return {
+            phone.canonical(country_code, area_code, international_access_code)
+            for phone in self.phone_numbers
+            if phone.number
+        }

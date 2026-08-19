@@ -103,20 +103,19 @@ password = your_password
 target_book = CardDAV Sync
 country = DE
 region = DE
-country_code = +49
-region_code = 30
 
 [regional]
-country_code = +49
-region_code = 30
+country_code = +49                 # REQUIRED (FR-017)
+area_code = 30                     # REQUIRED (FR-017)
+international_access_code = 00     # REQUIRED for normalization (FR-005)
 
-source_1
+[source_1]
 url = https://nextcloud.example.com
 username = user1
 password = pass1
 priority = 1
 
-source_2
+[source_2]
 url = https://caldav.example.com
 username = user2
 password = pass2
@@ -161,12 +160,16 @@ The utility uses INI format for configuration. Required sections:
 - `password`: FritzBox web interface password
 - `target_book`: Name of the address book to sync
 
+### Required Regional Configuration
+
+- `country_code`: Country code for normalization, e.g. `+49` (REQUIRED, FR-017)
+- `area_code`: Area code for normalization, e.g. `30` (REQUIRED, FR-017)
+- `international_access_code`: International access code for normalization, e.g. `00`
+
 ### Optional Settings
 
 - `country`: FritzBox country code (default: DE)
 - `region`: FritzBox region code (default: DE)
-- `country_code`: Default country code for normalization (default: +49)
-- `region_code`: Default region code for normalization (default: 30)
 
 ### CardDAV Source Configuration
 

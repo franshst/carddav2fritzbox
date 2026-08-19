@@ -218,14 +218,13 @@ password = your_password
 target_book = CardDAV Sync
 country = DE
 region = DE
-country_code = +49
-region_code = 30
 
 [regional]
-country_code = +49
-region_code = 30
+country_code = +49                 # REQUIRED (FR-017)
+area_code = 30                     # REQUIRED (FR-017)
+international_access_code = 00     # REQUIRED for normalization (FR-005)
 
-source_1
+[source_1]
 url = https://nextcloud.example.com
 username = user1
 password = pass1

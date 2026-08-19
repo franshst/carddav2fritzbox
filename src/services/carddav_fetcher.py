@@ -564,7 +564,7 @@ def example_usage():
             country="DE",
             region="DE",
             country_code="+49",
-            region_code="30"
+            area_code="30"
         ),
         sources=[
             CardDAVSourceConfig(

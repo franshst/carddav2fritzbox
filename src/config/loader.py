@@ -14,8 +14,9 @@ country = DE
 region = DE
 
 [regional]
-country_code = +49
-region_code = 30
+country_code = +49                 # REQUIRED (FR-017)
+area_code = 30                     # REQUIRED (FR-017)
+international_access_code = 00     # REQUIRED for normalization (FR-005)
 
 [source_1]
 url = https://nextcloud.example.com
@@ -32,12 +33,14 @@ priority = 2
 
 import configparser
 import os
-from typing import Dict, List, Optional
 from dataclasses import dataclass
+from typing import List, Optional
+
 
 @dataclass
 class CardDAVSourceConfig:
     """Configuration for a single CardDAV source."""
+
     url: str
     username: str
     password: str
@@ -52,14 +55,13 @@ class CardDAVSourceConfig:
 @dataclass
 class FritzBoxConfig:
     """Configuration for FritzBox connection and target."""
+
     url: str
     username: str
     password: str
     target_book: str = "CardDAV Sync"
     country: str = "DE"
     region: str = "DE"
-    country_code: str = "+49"
-    region_code: str = "30"
 
     @property
     def host(self) -> str:
@@ -69,22 +71,29 @@ class FritzBoxConfig:
 
 @dataclass
 class RegionalConfig:
-    """Regional settings for phone number normalization."""
+    """Regional settings for phone number normalization.
+
+    `country_code` and `area_code` are mandatory (spec.md FR-017).
+    """
+
     country: str
     region: str
     country_code: str
-    region_code: str
+    area_code: str
+    international_access_code: str = "00"
 
 
 @dataclass
 class GeneralConfig:
     """General utility settings."""
+
     name_order: str = "first_name_first"  # "first_name_first" or "last_name_first"
 
 
 @dataclass
 class SyncConfig:
     """Complete configuration for CardDAV to FritzBox sync."""
+
     general: GeneralConfig
     fritzbox: FritzBoxConfig
     regional: RegionalConfig
@@ -116,7 +125,7 @@ def load_config(config_path: str) -> SyncConfig:
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-    parser = configparser.ConfigParser()
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     # Preserve case sensitivity for field names
     parser.optionxform = lambda option: option
 
@@ -142,7 +151,7 @@ def load_config(config_path: str) -> SyncConfig:
         general=general_config,
         fritzbox=fritzbox_config,
         regional=regional_config,
-        sources=sources
+        sources=sources,
     )
 
 
@@ -152,12 +161,16 @@ def _load_general_config(parser: configparser.ConfigParser) -> GeneralConfig:
         # Provide defaults if section missing
         return GeneralConfig()
 
-    name_order = parser.get("general", "name_order", fallback="first_name_first").lower()
+    name_order = parser.get(
+        "general", "name_order", fallback="first_name_first"
+    ).lower()
 
     # Validate name_order value
     if name_order not in ["first_name_first", "last_name_first"]:
-        raise ValueError(f"Invalid name_order value: {name_order}. "
-                        f"Must be 'first_name_first' or 'last_name_first'")
+        raise ValueError(
+            f"Invalid name_order value: {name_order}. "
+            f"Must be 'first_name_first' or 'last_name_first'"
+        )
 
     return GeneralConfig(name_order=name_order)
 
@@ -176,8 +189,6 @@ def _load_fritzbox_config(parser: configparser.ConfigParser) -> FritzBoxConfig:
     target_book = parser.get("fritzbox", "target_book", fallback="CardDAV Sync")
     country = parser.get("fritzbox", "country", fallback="DE")
     region = parser.get("fritzbox", "region", fallback="DE")
-    country_code = parser.get("fritzbox", "country_code", fallback="+49")
-    region_code = parser.get("fritzbox", "region_code", fallback="30")
 
     return FritzBoxConfig(
         url=url,
@@ -186,38 +197,51 @@ def _load_fritzbox_config(parser: configparser.ConfigParser) -> FritzBoxConfig:
         target_book=target_book,
         country=country,
         region=region,
-        country_code=country_code,
-        region_code=region_code
     )
 
 
 def _load_regional_config(
-    parser: configparser.ConfigParser,
-    fritzbox_config: FritzBoxConfig
+    parser: configparser.ConfigParser, fritzbox_config: FritzBoxConfig
 ) -> RegionalConfig:
-    """Load regional configuration section."""
-    if parser.has_section("regional"):
-        # Use regional config if present
-        country = parser.get("regional", "country", fallback=fritzbox_config.country)
-        region = parser.get("regional", "region", fallback=fritzbox_config.region)
-        country_code = parser.get("regional", "country_code", fallback=fritzbox_config.country_code)
-        region_code = parser.get("regional", "region_code", fallback=fritzbox_config.region_code)
-    else:
-        # Use FritzBox config values
-        country = fritzbox_config.country
-        region = fritzbox_config.region
-        country_code = fritzbox_config.country_code
-        region_code = fritzbox_config.region_code
+    """Load regional configuration section.
+
+    `country_code` and `area_code` are mandatory (FR-017): the loader raises a
+    clear, human-readable error when either is missing or empty.
+    """
+    country = parser.get("regional", "country", fallback=fritzbox_config.country)
+    region = parser.get("regional", "region", fallback=fritzbox_config.region)
+    country_code = parser.get("regional", "country_code", fallback=None)
+    area_code = parser.get("regional", "area_code", fallback=None)
+    international_access_code = parser.get(
+        "regional", "international_access_code", fallback="00"
+    )
+
+    if not country_code or not country_code.strip():
+        raise ValueError(
+            "Missing required 'regional.country_code' in the configuration "
+            "(FR-017). Set country_code in the [regional] section, e.g. "
+            "country_code = +49."
+        )
+
+    if not area_code or not area_code.strip():
+        raise ValueError(
+            "Missing required 'regional.area_code' in the configuration "
+            "(FR-017). Set area_code in the [regional] section, e.g. "
+            "area_code = 30."
+        )
 
     return RegionalConfig(
         country=country,
         region=region,
-        country_code=country_code,
-        region_code=region_code
+        country_code=country_code.strip(),
+        area_code=area_code.strip(),
+        international_access_code=international_access_code.strip(),
     )
 
 
-def _load_carddav_sources_config(parser: configparser.ConfigParser) -> List[CardDAVSourceConfig]:
+def _load_carddav_sources_config(
+    parser: configparser.ConfigParser,
+) -> List[CardDAVSourceConfig]:
     """Load all CardDAV source configuration sections."""
     sources = []
 
@@ -233,25 +257,24 @@ def _load_carddav_sources_config(parser: configparser.ConfigParser) -> List[Card
                 # Optional priority field (default to 1 if not specified)
                 priority = parser.getint(section, "priority", fallback=1)
 
-                sources.append(CardDAVSourceConfig(
-                    url=url,
-                    username=username,
-                    password=password,
-                    priority=priority
-                ))
+                sources.append(
+                    CardDAVSourceConfig(
+                        url=url, username=username, password=password, priority=priority
+                    )
+                )
             except (configparser.NoOptionError, ValueError) as e:
                 raise ValueError(f"Invalid configuration in section [{section}]: {e}")
 
     if not sources:
-        raise ValueError("No CardDAV sources configured. At least one source section is required.")
+        raise ValueError(
+            "No CardDAV sources configured. At least one source section is required."
+        )
 
     return sources
 
 
 def _validate_config(
-    general: GeneralConfig,
-    fritzbox: FritzBoxConfig,
-    sources: List[CardDAVSourceConfig]
+    general: GeneralConfig, fritzbox: FritzBoxConfig, sources: List[CardDAVSourceConfig]
 ) -> None:
     """Validate configuration consistency."""
     # Validate general config
@@ -268,7 +291,9 @@ def _validate_config(
     # Validate sources
     for source in sources:
         if not source.url.startswith(("http://", "https://")):
-            raise ValueError(f"Invalid CardDAV URL for source {source.priority}: {source.url}")
+            raise ValueError(
+                f"Invalid CardDAV URL for source {source.priority}: {source.url}"
+            )
 
         if source.url.strip() == "":
             raise ValueError(f"Empty URL for source {source.priority}")
@@ -282,7 +307,9 @@ def _validate_config(
         # Check for duplicate priorities
         priority_count = sum(1 for s in sources if s.priority == source.priority)
         if priority_count > 1:
-            raise ValueError(f"Duplicate priority {source.priority} for CardDAV sources")
+            raise ValueError(
+                f"Duplicate priority {source.priority} for CardDAV sources"
+            )
 
     # Check source ordering
     priorities = sorted([s.priority for s in sources])
@@ -293,16 +320,19 @@ def _validate_config(
 def print_config_summary(config: SyncConfig) -> None:
     """Print a summary of the loaded configuration."""
     print("Configuration Summary:")
-    print(f"  General:")
+    print("  General:")
     print(f"    Name Order: {config.general.name_order}")
-    print(f"  FritzBox:")
+    print("  FritzBox:")
     print(f"    Host: {config.fritzbox.host}")
     print(f"    Target Book: {config.fritzbox.target_book}")
     print(f"    Country: {config.fritzbox.country}")
     print(f"    Region: {config.fritzbox.region}")
-    print(f"  Regional:")
+    print("  Regional:")
     print(f"    Country Code: {config.regional.country_code}")
-    print(f"    Region Code: {config.regional.region_code}")
+    print(f"    Area Code: {config.regional.area_code}")
+    print(f"    International Access Code: {config.regional.international_access_code}")
     print(f"  CardDAV Sources ({len(config.sources)}):")
     for source in config.sorted_sources:
-        print(f"    Source {source.priority}: {source.url} (username: {source.username})")
+        print(
+            f"    Source {source.priority}: {source.url} (username: {source.username})"
+        )

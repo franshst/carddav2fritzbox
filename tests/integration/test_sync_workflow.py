@@ -54,7 +54,7 @@ class TestSyncWorkflow:
                 country="DE",
                 region="DE",
                 country_code="+49",
-                region_code="30"
+                area_code="30"
             ),
             sources=[
                 CardDAVSourceConfig(
@@ -135,7 +135,7 @@ class TestSyncWorkflow:
                 country="US",
                 region="CA",
                 country_code="+1",
-                region_code="650"
+                area_code="650"
             ),
             sources=[]
         )
@@ -151,7 +151,9 @@ class TestSyncWorkflow:
         )
 
         # Normalize the contact
-        normalizer = PhoneNumberNormalizer(config.regional.country_code, config.regional.region_code)
+        normalizer = PhoneNumberNormalizer(
+            config.regional.country_code, config.regional.area_code
+        )
         normalized = validate_and_normalize_contact(contact, normalizer)
 
         # Verify normalization
@@ -173,7 +175,7 @@ class TestSyncWorkflow:
                 country="DE",
                 region="DE",
                 country_code="+49",
-                region_code="30"
+                area_code="30"
             ),
             sources=[]
         )
@@ -197,7 +199,7 @@ class TestSyncWorkflow:
                 country="DE",
                 region="DE",
                 country_code="+49",
-                region_code="30"
+                area_code="30"
             ),
             sources=[]
         )
@@ -253,7 +255,7 @@ name_order = first_name_first
                 country="DE",
                 region="DE",
                 country_code="+49",
-                region_code="30"
+                area_code="30"
             ),
             sources=[]
         )
@@ -308,7 +310,7 @@ name_order = first_name_first
                 country="DE",
                 region="DE",
                 country_code="+49",
-                region_code="30"
+                area_code="30"
             ),
             sources=[]
         )
