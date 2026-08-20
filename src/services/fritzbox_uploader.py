@@ -8,6 +8,8 @@ Key features:
   PBKDF2-HMAC-SHA256 for FRITZ!OS 7.24+, research.md section 2.1)
 - Multipart POST upload to /cgi-bin/firmwarecfg for mirror sync
 - XML document generation according to FritzBox schema
+- Contact picture sync (FR-020): converted JPEGs are uploaded over FTP into
+  the box's fonpix directory and referenced via a file:/// URL
 - Comprehensive error handling and logging
 - Session management with automatic re-authentication
 """
@@ -18,7 +20,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional
 from xml.dom import minidom
 
 import requests
@@ -26,7 +28,14 @@ import requests
 from src.config.loader import FritzBoxConfig
 from src.models.contact import Contact, EmailAddress, PhoneNumber
 from src.services.converter import PhoneNumberNormalizer
+from src.services.fritzbox_images import FritzBoxImageUploader, image_key
 from src.services.tr064 import Tr064Client
+
+# FritzBox XML schema limits (contracts/fritzbox-api.md, research.md section 4):
+# at most 9 phone numbers (id 0-8) and 2 email addresses (private, work) per
+# contact; exactly one number carries prio="1".
+_MAX_PHONE_NUMBERS = 9
+_MAX_EMAIL_ADDRESSES = 2
 
 
 @dataclass
@@ -97,6 +106,7 @@ class FritzBoxUploader:
         config: FritzBoxConfig,
         logger: logging.Logger,
         normalizer: Optional[PhoneNumberNormalizer] = None,
+        name_order: str = "first_name_first",
     ):
         """Initialize the FritzBox uploader.
 
@@ -106,12 +116,16 @@ class FritzBoxUploader:
             normalizer: Optional PhoneNumberNormalizer used to shorten numbers
                 at export time (FR-006). When None, numbers are uploaded in
                 their canonical form.
+            name_order: Name ordering for the ``<realName>`` export
+                (FR-015): ``first_name_first`` ("First Last") or
+                ``last_name_first`` ("Last, First").
         """
         self.config = config
         self.logger = logger
         self.session_id: Optional[str] = None
         self.host = config.host
         self.normalizer = normalizer
+        self.name_order = name_order
 
     def authenticate(self) -> bool:
         """Authenticate with FritzBox using challenge-response mechanism.
@@ -270,8 +284,37 @@ class FritzBoxUploader:
                     )
             contacts = [c for c in contacts if c.phone_numbers]
 
+            # Contact picture sync (FR-020): upload converted JPEGs into the
+            # box's fonpix directory over FTP and reference them via file:///
+            # URLs. Without fonpix_dir/imagepath configured pictures are
+            # skipped with a warning (embedded data URIs are not resolved by
+            # the box). When pictures are to be synced, the FTP picture
+            # directory is verified first: if it is unavailable the sync is
+            # aborted before anything is uploaded so the existing phonebook
+            # stays intact (FR-021).
+            image_urls: Optional[Dict[str, str]] = None
+            if self._image_sync_configured():
+                if any(c.picture_data for c in contacts):
+                    image_uploader = self._build_image_uploader()
+                    if not image_uploader.check_directory():
+                        self.logger.error(
+                            "Aborting sync: the FTP picture directory is not "
+                            "available; the existing phonebook was left "
+                            "untouched (FR-021)."
+                        )
+                        return False
+                    image_urls = image_uploader.sync_images(contacts)
+            elif any(c.picture_data for c in contacts):
+                self.logger.warning(
+                    "Contact pictures present but image sync is not configured; "
+                    "set fritzbox.fonpix_dir and fritzbox.imagepath to upload "
+                    "pictures via FTP (FR-020)."
+                )
+
             # Generate XML document
-            phonebook_xml = self._generate_phonebook_xml(contacts, phonebook_name)
+            phonebook_xml = self._generate_phonebook_xml(
+                contacts, phonebook_name, image_urls
+            )
 
             # Upload via multipart/form-data
             success = self._upload_to_fritzbox(phonebook_xml, phonebook_name, target_id)
@@ -334,13 +377,19 @@ class FritzBoxUploader:
         return 0
 
     def _generate_phonebook_xml(
-        self, contacts: List[Contact], phonebook_name: str
+        self,
+        contacts: List[Contact],
+        phonebook_name: str,
+        image_urls: Optional[Dict[str, str]] = None,
     ) -> str:
         """Generate FritzBox phonebook XML document from Contact objects.
 
         Args:
             contacts: List of Contact objects to convert
             phonebook_name: Name for the phonebook
+            image_urls: Optional mapping of contact key to the uploaded
+                ``file:///`` picture URL (FR-020). When present, inline
+                ``picture_data`` is referenced through it.
 
         Returns:
             XML document as string
@@ -349,7 +398,7 @@ class FritzBoxUploader:
 
         # Convert each Contact to ContactXML
         for i, contact in enumerate(contacts):
-            contact_xml = self._convert_contact_to_xml(contact)
+            contact_xml = self._convert_contact_to_xml(contact, image_urls)
             contact_xml.mod_time = int(time.time())
             contact_xml.unique_id = i + 1
             phonebook_xml.contacts.append(contact_xml)
@@ -378,11 +427,11 @@ class FritzBoxUploader:
                 telephony_elem = ET.SubElement(contact_elem, "telephony")
                 telephony_elem.set("nid", str(len(contact_xml.phone_numbers)))
 
-                for phone in contact_xml.phone_numbers:
+                for idx, phone in enumerate(contact_xml.phone_numbers):
                     number_elem = ET.SubElement(telephony_elem, "number")
                     number_elem.set("type", phone.type)
                     number_elem.set("prio", str(phone.prio))
-                    number_elem.set("id", str(phone.prio))
+                    number_elem.set("id", str(idx))
                     number_elem.set("quickdial", phone.quickdial)
                     number_elem.set("vanity", phone.vanity)
                     number_elem.text = phone.number
@@ -412,23 +461,35 @@ class FritzBoxUploader:
         xml_str = ET.tostring(root, encoding="utf-8")
         return self._pretty_print_xml(xml_str)
 
-    def _convert_contact_to_xml(self, contact: Contact) -> ContactXML:
+    def _convert_contact_to_xml(
+        self, contact: Contact, image_urls: Optional[Dict[str, str]] = None
+    ) -> ContactXML:
         """Convert a Contact object to ContactXML.
 
         Args:
             contact: Contact object to convert
+            image_urls: Optional mapping of contact key to the uploaded
+                ``file:///`` picture URL (FR-020).
 
         Returns:
             ContactXML object
         """
         contact_xml = ContactXML(
-            name=contact.name,
+            name=contact.get_display_name(self.name_order),
             category="1" if contact.is_vip else "0",
-            image_url=contact.picture_url,
+            image_url=self._image_url_for(contact, image_urls),
         )
 
-        # Convert phone numbers (shorten for FritzBox at export time, FR-006)
-        for phone in contact.phone_numbers:
+        # Phone numbers (shortened for FritzBox at export time, FR-006).
+        # FritzBox stores at most 9 numbers per contact (id 0-8) with exactly
+        # one prio="1" (the first number); excess numbers are dropped with a
+        # warning (contracts/fritzbox-api.md, research.md section 4).
+        phones = contact.phone_numbers[:_MAX_PHONE_NUMBERS]
+        for skipped in contact.phone_numbers[_MAX_PHONE_NUMBERS:]:
+            self.logger.warning(
+                f"Skipping extra phone number for {contact.name}: {skipped.number}"
+            )
+        for idx, phone in enumerate(phones):
             number = phone.number
             if self.normalizer is not None:
                 number = self.normalizer.format_for_fritzbox(number)
@@ -436,20 +497,76 @@ class FritzBoxUploader:
                 PhoneNumber(
                     number=number,
                     type=phone.type,
-                    prio=phone.prio,
+                    prio=1 if idx == 0 else 0,
                     quickdial=phone.quickdial,
                     vanity=phone.vanity,
                 )
             )
 
-        # Convert email addresses
+        # Email addresses: FritzBox stores at most 2 per contact (one
+        # "private", one "work"); excess addresses are dropped with a warning
+        # (contracts/fritzbox-api.md, research.md section 4).
+        emails_by_classifier = {}
         for email in contact.emails:
-            contact_xml.email_addresses.append(
-                EmailAddress(email=email.email, classifier=email.classifier)
+            if len(emails_by_classifier) >= _MAX_EMAIL_ADDRESSES:
+                continue
+            classifier = (
+                email.classifier
+                if email.classifier in ("private", "work")
+                else "private"
             )
+            emails_by_classifier.setdefault(classifier, email)
+        skipped_emails = len(contact.emails) - len(emails_by_classifier)
+        if skipped_emails > 0:
+            self.logger.warning(
+                f"Skipping {skipped_emails} extra email address(es) for "
+                f"{contact.name}"
+            )
+        contact_xml.email_addresses = list(emails_by_classifier.values())
 
         contact_xml.unique_id = contact.unique_id
         return contact_xml
+
+    def _image_url_for(
+        self, contact: Contact, image_urls: Optional[Dict[str, str]] = None
+    ) -> Optional[str]:
+        """Return the ``<imageURL>`` value for a contact (FR-020).
+
+        Inline ``picture_data`` is referenced through the uploaded ``file:///``
+        URL produced by :class:`~src.services.fritzbox_images.FritzBoxImageUploader`
+        when image sync is configured (the box resolves ``<imageURL>`` to a
+        file on its own storage and cannot display embedded data). When no
+        upload succeeded, the picture is omitted. External photo URIs are
+        written as-is.
+        """
+        if contact.picture_data:
+            if image_urls:
+                url = image_urls.get(image_key(contact))
+                if url:
+                    return url
+                self.logger.warning(
+                    f"Picture for {contact.name} could not be uploaded; "
+                    "omitting imageURL"
+                )
+            return None
+        return contact.picture_url
+
+    def _image_sync_configured(self) -> bool:
+        """True when both the FTP target dir and file:/// prefix are set."""
+        return self.config.image_sync_configured
+
+    def _build_image_uploader(self) -> FritzBoxImageUploader:
+        """Build the FTP image uploader from the current configuration."""
+        config = self.config
+        return FritzBoxImageUploader(
+            host=config.ftp_host or config.host,
+            username=config.ftp_user or config.username,
+            password=config.ftp_pass or config.password,
+            fonpix_dir=config.fonpix_dir,
+            imagepath=config.imagepath,
+            plain=config.ftp_plain,
+            logger=self.logger,
+        )
 
     def _pretty_print_xml(self, xml_bytes: bytes) -> str:
         """Format XML with proper indentation.
@@ -566,131 +683,3 @@ class FritzBoxUploader:
         except Exception as e:
             self.logger.error(f"FritzBox connection test failed: {e}")
             return False
-
-
-class XMLGenerator:
-    """Utility class for generating FritzBox-compatible XML documents.
-
-    Provides methods for:
-    - Generating phonebook XML from contact lists
-    - Formatting XML with proper indentation
-    - Validating XML structure
-    """
-
-    @staticmethod
-    def generate_phonebook_xml(
-        phonebook_name: str, contacts: List[Contact], phonebook_id: int = 0
-    ) -> str:
-        """Generate complete phonebook XML document.
-
-        Args:
-            phonebook_name: Name for the phonebook
-            contacts: List of contacts to include
-            phonebook_id: Phonebook ID (default: 0)
-
-        Returns:
-            Formatted XML string
-        """
-        uploader = FritzBoxUploader(
-            FritzBoxConfig(
-                url=f"http://{phonebook_name}", username="", password="", target_book=""
-            ),
-            logging.getLogger(__name__),
-        )
-
-        return uploader._generate_phonebook_xml(contacts, phonebook_name)
-
-    @staticmethod
-    def validate_xml_structure(xml_content: str) -> Tuple[bool, str]:
-        """Validate XML structure against FritzBox requirements.
-
-        Args:
-            xml_content: XML content to validate
-
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        try:
-            root = ET.fromstring(xml_content)
-
-            # Check root element
-            if root.tag != "phonebooks":
-                return False, "Root element must be 'phonebooks'"
-
-            # Check phonebook element
-            phonebook = root.find("phonebook")
-            if phonebook is None:
-                return False, "Missing phonebook element"
-
-            # Check required attributes
-            if "name" not in phonebook.attrib:
-                return False, "Phonebook element must have 'name' attribute"
-
-            return True, "XML structure is valid"
-
-        except ET.ParseError as e:
-            return False, f"Invalid XML: {e}"
-        except Exception as e:
-            return False, f"XML validation error: {e}"
-
-
-def example_usage():
-    """Example demonstrating how to use FritzBoxUploader."""
-    import logging
-
-    # Setup logger
-    logger = logging.getLogger(__name__)
-    logging.basicConfig(level=logging.INFO)
-
-    # Mock configuration
-    config = FritzBoxConfig(
-        url="https://fritz.box",
-        username="test_user",
-        password="test_password",
-        target_book="CardDAV Sync",
-    )
-
-    # Create uploader
-    uploader = FritzBoxUploader(config, logger)
-
-    # Test connection
-    print("Testing FritzBox connection...")
-    if uploader.test_connection():
-        print("Connection test: PASSED")
-    else:
-        print("Connection test: FAILED")
-
-    # Example contact list
-    contacts = [
-        Contact(
-            name="John Doe",
-            phone_numbers=[PhoneNumber(number="+1234567890", type="home", prio=1)],
-            emails=[EmailAddress(email="john@example.com", classifier="private")],
-        ),
-        Contact(
-            name="Jane Smith",
-            phone_numbers=[
-                PhoneNumber(number="+442071234567", type="mobile", prio=1),
-                PhoneNumber(number="+44203456789", type="work", prio=0),
-            ],
-            emails=[EmailAddress(email="jane@company.com", classifier="work")],
-        ),
-    ]
-
-    # Upload phonebook
-    print("\nUploading phonebook to FritzBox...")
-    if uploader.upload_phonebook(contacts, "CardDAV Sync", 0):
-        print("Phonebook upload: SUCCESS")
-    else:
-        print("Phonebook upload: FAILED")
-
-    # Test authentication
-    print("\nTesting authentication...")
-    if uploader.authenticate():
-        print("Authentication: SUCCESS")
-    else:
-        print("Authentication: FAILED")
-
-
-if __name__ == "__main__":
-    example_usage()

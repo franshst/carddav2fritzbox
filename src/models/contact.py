@@ -95,10 +95,6 @@ class PhoneNumber:
         """Check if this is the primary phone number."""
         return self.prio == 1
 
-    def format_for_fritzbox(self) -> str:
-        """Format phone number for FritzBox XML export."""
-        return self.number
-
     @staticmethod
     def normalize_phone_number(phone: str) -> str:
         """Normalize a phone number string by stripping all non-numeric characters
@@ -149,34 +145,12 @@ class Contact:
                 return email
         return self.emails[0] if self.emails else None
 
-    def get_normalized_identity(
-        self,
-        name_order: str = "first_name_first",
-        country_code: str = "",
-        area_code: str = "",
-        international_access_code: str = "",
-    ) -> str:
-        """Get contact identity string for merging: formatted name plus the
-        primary phone or email.
-
-        The phone number is compared in its canonical normalized form (FR-018).
+    def get_display_name(self, name_order: str = "first_name_first") -> str:
+        """Return the display name formatted per the configured name order
+        (spec.md FR-015): "First Last" for ``first_name_first`` (default) and
+        "Last, First" for ``last_name_first``.
         """
-        formatted_name = self._format_name(name_order)
-        identity_parts = [formatted_name]
-
-        primary_phone = self.get_primary_phone()
-        if primary_phone:
-            identity_parts.append(
-                primary_phone.canonical(
-                    country_code, area_code, international_access_code
-                )
-            )
-        else:
-            primary_email = self.get_primary_email()
-            if primary_email:
-                identity_parts.append(primary_email.email)
-
-        return "|".join(identity_parts)
+        return self._format_name(name_order)
 
     def _format_name(self, name_order: str) -> str:
         """Format name according to the configured name order."""
@@ -208,7 +182,9 @@ class Contact:
           values are kept once (first occurrence wins, FR-004). Telephone
           numbers are compared in their canonical normalized form (FR-018),
           email addresses case-insensitively.
-        - Single-fields (picture): Kept from this contact
+        - Single-fields (picture): Filled by the first source that provides
+          them (fill-in rule, FR-004) — a lower-priority source supplies the
+          value only when the higher-priority contact leaves it empty.
         """
         existing_phones = self._canonical_phone_set(
             country_code, area_code, international_access_code
@@ -225,6 +201,10 @@ class Contact:
             if key not in existing_emails:
                 self.emails.append(email)
                 existing_emails.add(key)
+
+        if not self.picture_data and not self.picture_url:
+            self.picture_data = other.picture_data
+            self.picture_url = other.picture_url
         return self
 
     def is_duplicate_of(

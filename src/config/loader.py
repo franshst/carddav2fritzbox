@@ -12,6 +12,16 @@ password = your_password
 target_book = CardDAV Sync
 country = DE
 region = DE
+# Contact picture sync (FR-020): the box resolves <imageURL> to a file on its
+# own storage, so converted JPEGs are uploaded over FTP into the box's fonpix
+# directory and referenced via a file:/// URL.
+fonpix_dir = /FRITZ/fonpix
+imagepath = file:///var/InternerSpeicher/FRITZ/fonpix
+ftp_plain = true
+# Optional: a dedicated FTP/NAS user; defaults to the FritzBox credentials.
+# ftp_host = fritz.box
+# ftp_user = ftpuser
+# ftp_pass = ftppass
 
 [regional]
 country_code = +49                 # REQUIRED (FR-017)
@@ -62,11 +72,28 @@ class FritzBoxConfig:
     target_book: str = "CardDAV Sync"
     country: str = "DE"
     region: str = "DE"
+    # Contact picture sync (FR-020): the box resolves <imageURL> to a file on
+    # its own storage, so converted JPEGs are uploaded over FTP into
+    # ``fonpix_dir`` (e.g. ``/FRITZ/fonpix`` on internal storage or the path
+    # on a USB stick) and referenced via the ``file:///`` ``imagepath`` prefix.
+    # Both must be set for picture sync; FTP defaults to plain FTP on the box
+    # itself using the web-UI credentials (overridable via ftp_host/user/pass).
+    fonpix_dir: str = ""
+    imagepath: str = ""
+    ftp_plain: bool = True
+    ftp_host: Optional[str] = None
+    ftp_user: Optional[str] = None
+    ftp_pass: Optional[str] = None
 
     @property
     def host(self) -> str:
         """Extract hostname from URL."""
         return self.url.replace("https://", "").replace("http://", "")
+
+    @property
+    def image_sync_configured(self) -> bool:
+        """True when both FTP target dir and ``file:///`` prefix are set."""
+        return bool(self.fonpix_dir and self.imagepath)
 
 
 @dataclass
@@ -205,6 +232,16 @@ def _load_fritzbox_config(parser: configparser.ConfigParser) -> FritzBoxConfig:
     country = parser.get("fritzbox", "country", fallback="DE")
     region = parser.get("fritzbox", "region", fallback="DE")
 
+    # Contact picture sync over FTP (FR-020): pictures are uploaded into the
+    # box's fonpix directory and referenced via a file:/// URL. Picture sync is
+    # enabled only when both fonpix_dir and imagepath are configured.
+    fonpix_dir = parser.get("fritzbox", "fonpix_dir", fallback="").strip()
+    imagepath = parser.get("fritzbox", "imagepath", fallback="").strip()
+    ftp_plain = parser.getboolean("fritzbox", "ftp_plain", fallback=True)
+    ftp_host = parser.get("fritzbox", "ftp_host", fallback="").strip() or None
+    ftp_user = parser.get("fritzbox", "ftp_user", fallback="").strip() or None
+    ftp_pass = parser.get("fritzbox", "ftp_pass", fallback="").strip() or None
+
     return FritzBoxConfig(
         url=url,
         username=username,
@@ -212,6 +249,12 @@ def _load_fritzbox_config(parser: configparser.ConfigParser) -> FritzBoxConfig:
         target_book=target_book,
         country=country,
         region=region,
+        fonpix_dir=fonpix_dir,
+        imagepath=imagepath,
+        ftp_plain=ftp_plain,
+        ftp_host=ftp_host,
+        ftp_user=ftp_user,
+        ftp_pass=ftp_pass,
     )
 
 
@@ -349,6 +392,11 @@ def print_config_summary(config: SyncConfig) -> None:
     print(f"    Target Book: {config.fritzbox.target_book}")
     print(f"    Country: {config.fritzbox.country}")
     print(f"    Region: {config.fritzbox.region}")
+    if config.fritzbox.image_sync_configured:
+        picture_sync = f"{config.fritzbox.imagepath} (FTP {config.fritzbox.fonpix_dir})"
+        print(f"    Picture Sync: {picture_sync}")
+    else:
+        print("    Picture Sync: disabled (set fritzbox.fonpix_dir and imagepath)")
     print("  Regional:")
     print(f"    Country Code: {config.regional.country_code}")
     print(f"    Area Code: {config.regional.area_code}")

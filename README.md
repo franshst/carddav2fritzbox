@@ -17,8 +17,11 @@ intelligently merges the same contact from multiple sources into a single one.
   (drop `+`/country/area code → leading `0`) at upload time
 - **Named Target Book**: the `target_book` is created/used by name via TR-064
   (the main phonebook cannot be renamed, so a secondary book is used)
-- **vCard Image Processing**: Convert contact photos to FritzBox-compatible JPG format
+- **vCard Image Processing**: Convert contact photos to FritzBox-compatible JPG
+  and deliver them over FTP (FR-020)
 - **Mirror Sync**: Completely overwrite FritzBox address book (prune old contacts)
+- **Safe Abort (FR-021)**: when the FTP picture directory is unavailable the
+  sync aborts before uploading anything, keeping the existing phonebook intact
 - **Non-Interactive**: Designed for cron job execution
 - **Secure Credential Handling**: Support for environment variables or config files
 - **Comprehensive Logging**: Detailed progress and error reporting
@@ -39,6 +42,7 @@ src/
 │   ├── __init__.py
 │   ├── carddav_fetcher.py
 │   ├── converter.py
+│   ├── fritzbox_images.py
 │   └── fritzbox_uploader.py
 ├── utils/
 │   ├── __init__.py
@@ -107,6 +111,9 @@ password = your_password
 target_book = CardDAV Sync
 country = DE
 region = DE
+# Optional contact picture sync (FR-020): see "Contact Picture Sync" below
+fonpix_dir = /FRITZ/fonpix
+imagepath = file:///var/InternerSpeicher/FRITZ/fonpix
 
 [regional]
 country_code = +49                 # REQUIRED (FR-017)
@@ -183,6 +190,40 @@ is unreachable, the utility falls back to the main phonebook with a warning.
 
 - `country`: FritzBox country code (default: DE)
 - `region`: FritzBox region code (default: DE)
+
+### Contact Picture Sync (FR-020)
+
+The FritzBox displays a contact picture only when the `<imageURL>` written into
+the phonebook XML references a **file on the box's own storage** (internal or
+USB). It does **not** display embedded data URIs. The utility therefore uploads
+the converted JPEGs over FTP into a `fonpix` directory on the box and writes a
+`file:///` reference into the phonebook.
+
+Picture sync is optional and enabled only when **both** of these `[fritzbox]`
+keys are set:
+
+| Key | Meaning | Example |
+|-----|---------|---------|
+| `fonpix_dir` | FTP directory on the box to upload pictures into, as the box's FTP server sees it | `/FRITZ/fonpix` (internal storage) or `/USBSTICK/FRITZ/fonpix` (USB stick) |
+| `imagepath` | `file:///` URL of the **same** directory as seen by the box itself | `file:///var/InternerSpeicher/FRITZ/fonpix` |
+
+The box resolves `imagepath` against its own filesystem when rendering a
+picture — it is never fetched over the network. To find the exact value for
+your box, give one contact a picture via the FritzBox UI, export the phonebook,
+and read the `<imageURL>` it produces.
+
+Optional related keys:
+
+- `ftp_host`, `ftp_user`, `ftp_pass`: a dedicated FTP/NAS user for the upload.
+  They default to the box host and the web-UI `username`/`password`.
+- `ftp_plain`: `true` (default) for plain FTP, `false` for explicit FTPS.
+
+**Failure behaviour (FR-021)**: when picture sync is configured and at least
+one contact has a picture, the FTP picture directory is verified **before
+anything is uploaded**. If it cannot be reached or created, the sync aborts
+with a clear error and a non-zero exit code — the existing phonebook is left
+untouched (a silent skip would otherwise strip all pictures on the next
+mirror-sync overwrite).
 
 ### CardDAV Source Configuration
 

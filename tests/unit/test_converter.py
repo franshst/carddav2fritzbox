@@ -15,7 +15,6 @@ from src.models.contact import Contact, EmailAddress, PhoneNumber
 from src.services.converter import (
     ImageConverter,
     PhoneNumberNormalizer,
-    extract_phone_number_info,
     process_contact_photos,
     validate_and_normalize_contact,
 )
@@ -281,28 +280,6 @@ class TestImageConverter:
         converter = ImageConverter()  # No logger
         converter._log_warning("Test warning")
         # Should print to stdout (can't easily capture in test)
-
-
-class TestExtractPhoneNumberInfo:
-    """Test extract_phone_number_info function."""
-
-    def test_extract_phone_number_info_with_plus(self):
-        """Test extraction with phone number containing '+'."""
-        phone = extract_phone_number_info("+1234567890", "mobile", 1)
-        assert phone.number == "+1234567890"
-        assert phone.type == "mobile"
-        assert phone.prio == 1
-
-    def test_extract_phone_number_info_without_plus(self):
-        """Test extraction with local phone number."""
-        with patch("src.services.converter.PhoneNumberNormalizer") as mock_normalizer:
-            mock_normalizer.return_value.normalize.return_value = "1234567890"
-            mock_normalizer.return_value.format_for_fritzbox.return_value = (
-                "+491234567890"
-            )
-
-            phone = extract_phone_number_info("1234567890", "home", 0)
-            assert phone.number == "+491234567890"
 
 
 class TestProcessContactPhotos:

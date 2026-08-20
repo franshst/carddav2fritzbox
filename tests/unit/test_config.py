@@ -207,6 +207,74 @@ class TestConfigValidation:
         loaded = load_config(_write_config(tmp_path, config))
         assert loaded.general.name_order == "first_name_first"
 
+    def test_image_sync_disabled_by_default(self, tmp_path):
+        """Without fonpix_dir/imagepath, picture sync is disabled (FR-020)."""
+        config = _build_config("country_code = +49\narea_code = 30\n")
+        loaded = load_config(_write_config(tmp_path, config))
+        assert loaded.fritzbox.fonpix_dir == ""
+        assert loaded.fritzbox.imagepath == ""
+        assert loaded.fritzbox.image_sync_configured is False
+        assert loaded.fritzbox.ftp_plain is True
+
+    def test_image_sync_configuration_loaded(self, tmp_path):
+        """fonpix_dir/imagepath/ftp settings are loaded from [fritzbox]."""
+        config = (
+            "[general]\n"
+            "name_order = first_name_first\n\n"
+            "[fritzbox]\n"
+            "url = https://fritz.box\n"
+            "username = user\n"
+            "password = pass\n"
+            "target_book = CardDAV Sync\n"
+            "country = DE\n"
+            "region = DE\n"
+            "fonpix_dir = /FRITZ/fonpix\n"
+            "imagepath = file:///var/InternerSpeicher/FRITZ/fonpix\n"
+            "ftp_plain = false\n"
+            "ftp_host = nas.local\n"
+            "ftp_user = ftpuser\n"
+            "ftp_pass = ftppass\n\n"
+            "[regional]\n"
+            "country_code = +49\n"
+            "area_code = 30\n\n"
+            "[source_1]\n"
+            "url = https://nextcloud.example.com/carddav\n"
+            "username = user1\n"
+            "password = pass1\n"
+            "priority = 1\n"
+        )
+        loaded = load_config(_write_config(tmp_path, config))
+
+        assert loaded.fritzbox.fonpix_dir == "/FRITZ/fonpix"
+        assert loaded.fritzbox.imagepath == "file:///var/InternerSpeicher/FRITZ/fonpix"
+        assert loaded.fritzbox.image_sync_configured is True
+        assert loaded.fritzbox.ftp_plain is False
+        assert loaded.fritzbox.ftp_host == "nas.local"
+        assert loaded.fritzbox.ftp_user == "ftpuser"
+        assert loaded.fritzbox.ftp_pass == "ftppass"
+
+    def test_image_sync_requires_both_dir_and_imagepath(self, tmp_path):
+        """Picture sync is enabled only when both keys are set."""
+        config = (
+            "[general]\n"
+            "name_order = first_name_first\n\n"
+            "[fritzbox]\n"
+            "url = https://fritz.box\n"
+            "username = user\n"
+            "password = pass\n"
+            "fonpix_dir = /FRITZ/fonpix\n\n"
+            "[regional]\n"
+            "country_code = +49\n"
+            "area_code = 30\n\n"
+            "[source_1]\n"
+            "url = https://nextcloud.example.com/carddav\n"
+            "username = user1\n"
+            "password = pass1\n"
+            "priority = 1\n"
+        )
+        loaded = load_config(_write_config(tmp_path, config))
+        assert loaded.fritzbox.image_sync_configured is False
+
 
 def _build_env_config() -> str:
     """Build a valid config with NO credentials (to be supplied via env)."""

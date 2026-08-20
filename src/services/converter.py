@@ -286,28 +286,6 @@ class ImageConverter:
             print(f"Warning: {message}")
 
 
-def extract_phone_number_info(
-    phone: str, phone_type: str = "home", prio: int = 0
-) -> PhoneNumber:
-    """Create a PhoneNumber object with normalization applied.
-
-    Args:
-        phone: Raw phone number string
-        phone_type: Type of phone ("home", "mobile", "work", "fax")
-        prio: Priority (1 for primary, 0 for secondary)
-
-    Returns:
-        PhoneNumber object with normalized number
-    """
-    normalizer = PhoneNumberNormalizer()
-    normalized_number = normalizer.normalize(phone)
-    formatted_number = normalizer.format_for_fritzbox(normalized_number)
-
-    return PhoneNumber(
-        number=formatted_number, type=phone_type, prio=prio, quickdial="", vanity=""
-    )
-
-
 def process_contact_photos(
     contact: Contact, image_converter: ImageConverter
 ) -> Contact:
@@ -417,28 +395,3 @@ def validate_and_normalize_contact(
     validated_contact.emails = contact.emails.copy()
 
     return validated_contact
-
-
-if __name__ == "__main__":
-    # Example usage
-    print("Phone Number Normalizer Example:")
-    normalizer = PhoneNumberNormalizer("+49", "30", "00")
-
-    test_numbers = [
-        "+1 (415) 555-2671",
-        "0049 30 123456",
-        "030-1234567",
-        "0151-2345678",
-    ]
-
-    for number in test_numbers:
-        normalized = normalizer.normalize(number)
-        shortened = normalizer.shorten(normalized)
-        print(f"Original: {number}")
-        print(f"Canonical: {normalized}")
-        print(f"Shortened: {shortened}")
-        print(f"Valid: {normalizer.validate_fritzbox_format(normalized)}")
-        print()
-
-    print("Image Converter Example:")
-    converter = ImageConverter()

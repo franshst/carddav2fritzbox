@@ -24,6 +24,12 @@
 - Q: Should the configured area code always be required, or may it be absent for regions without area codes? → A: Mandatory — the config always defines `country_code` and `area_code`; missing values cause a clear validation error.
 - Q: After contacts are merged, should duplicate identical telephone numbers (and email addresses) within a contact be removed? → A: Yes — multi-occurrence fields are appended only when unique; identical values are kept once (first occurrence wins), telephone numbers compared in canonical normalized form and email addresses case-insensitively.
 
+### Session 2026-08-20
+- Q: Is syncing the contact profile picture a must-have requirement? → A: Yes — profile picture sync is a must-have: the picture from the highest-priority source must be extracted, converted to baseline JPEG (max 300×300), and exported to the FritzBox address book together with the contact.
+- Q: When a higher-priority source has no picture, should a lower-priority source's picture be used? → A: Yes — single-occurrence fields are filled by the first source that provides them (fill-in rule): a lower-priority source supplies the value only when all higher-priority sources leave it empty.
+- Q: How does the FritzBox resolve `<imageURL>` in the phonebook XML? → A: It is a reference to a picture file stored on the box's own storage (internal or USB), not embedded image data. AVM's own phonebook exports use `file:///var/InternerSpeicher/FRITZ/fonpix/<timestamp>-<n>.jpg`; pictures are not carried in the phonebook backup/restore XML at all. Therefore converted JPEGs are uploaded over FTP into the box's `fonpix` directory (plain FTP or explicit FTPS) and referenced from `<imageURL>` via a `file:///` URL — the mechanism the reference tool andig/carddav2fb uses. Embedded data URIs are not displayed by the box.
+- Q: What should happen when picture sync is configured but the FTP picture directory is unavailable? → A: The sync must abort with a clear error before anything is uploaded (neither pictures nor the phonebook), leaving the existing phonebook intact (FR-021). Silently skipping pictures would, on the next mirror-sync overwrite, strip the pictures from the phonebook that is uploaded.
+
 ## User Scenarios & Testing
 
 ### User Story 1 - Sync Contacts to FritzBox (Priority: P1)
@@ -64,6 +70,9 @@ The user wants the utility to securely handle credentials for both the CardDAV s
 - What happens when the configuration is missing `country_code` or `area_code`? → The tool exits with a clear, human-readable error to stderr and a non-zero status.
 - What happens when a source number already starts with `+`? → It is treated as already normalized and used as-is for comparison and shortening.
 - What happens when a merged contact contains the same telephone number (or email address) from multiple sources? → The value is stored once (first occurrence wins); telephone numbers are compared in canonical normalized form and email addresses case-insensitively.
+- What happens when a contact picture cannot be converted (corrupt data, unsupported format, or external URI not downloadable)? → The picture is skipped with a warning to stderr and the contact is still synced without a picture.
+- What happens when a contact has an inline picture but the FTP image sync is not configured (`fonpix_dir`/`imagepath` missing)? → The picture is skipped with a warning to stderr and the contact is still synced without a picture (the box resolves `<imageURL>` to a file on its own storage; embedded data URIs are not displayed).
+- What happens when picture sync is configured but the FTP picture directory is not available (missing or not creatable)? → The sync aborts with a clear error to stderr and a non-zero exit code BEFORE anything is uploaded; the existing phonebook stays intact (FR-021).
 
 ## Requirements
 
@@ -74,7 +83,7 @@ The user wants the utility to securely handle credentials for both the CardDAV s
 - **FR-003**: System MUST provide a command-line interface suitable for non-interactive execution (e.g., via cron) for triggering a sync process.
 - **FR-004**: System MUST merge contact data from multiple sources:
     - A contact is identified as identical if the name and either a (normalized) telephone number or an email address matches.
-    - Fields representable only once (e.g., picture, home address) MUST be taken from the first encountered contact based on the sequential order of sources defined in the configuration file.
+    - Fields representable only once (e.g., picture, home address) MUST be taken from the first source that provides them (fill-in rule): a lower-priority source fills the field only when all higher-priority sources leave it empty.
     - Fields allowing multiple occurrences (e.g., telephone numbers, email addresses) MUST be merged by appending them, but only when unique: duplicate identical values MUST be dropped (keeping the first occurrence). Telephone numbers are compared in canonical normalized form (FR-018); email addresses are compared case-insensitively.
 - **FR-005**: System MUST normalize telephone numbers into a canonical intermediate form containing only digits and a leading `+` (international access) sign: if the number starts with `+`, it is already normalized; if it starts with the numeric international access code from config (e.g., `00` in Europe, `09` in the US), replace that code with `+`; if it starts with `0`, replace the leading `0` with `+` followed by the configured country code; otherwise prepend `+`, the configured country code, and the configured area code without its leading zero.
 - **FR-006**: System MUST shorten telephone numbers for the FritzBox telephone book: keep numbers whose country code differs from the book's configured country in canonical form; otherwise remove the `+` and country code, prepend a leading `0`, and remove the area code when it equals the book's configured area code (the trunk `0` and area code are not dialed within the same area, leaving the bare subscriber number, e.g. in the Netherlands).
@@ -91,6 +100,8 @@ The user wants the utility to securely handle credentials for both the CardDAV s
 - **FR-017**: System MUST require `country_code` and `area_code` in the configuration and fail with a clear, human-readable error if either is missing.
 - **FR-018**: System MUST compare telephone numbers (for contact identity and deduplication) always using the normalized canonical form.
 - **FR-019**: System MUST skip a source telephone number that cannot be normalized (e.g., no digits remain after sanitization), keep the contact with its remaining valid numbers, and log a warning to stderr.
+- **FR-020**: System MUST sync contact profile pictures as part of the mirror sync: extract the `PHOTO` from the CardDAV source (inline base64 or external URI), take it from the first source that provides one (highest-priority source having a picture, per the fill-in rule in FR-004), convert it to baseline JPEG (max 300×300), upload it over FTP into the FritzBox's `fonpix` storage directory (`fritzbox.fonpix_dir`), and reference it from `<imageURL>` in the address book export via the configured `file:///` URL (`fritzbox.imagepath`). The box resolves `<imageURL>` to a file on its own storage and cannot display embedded data URIs, so inline pictures require both `fonpix_dir` and `imagepath` to be configured (plain FTP or explicit FTPS via `ftp_plain`; optional dedicated `ftp_host`/`ftp_user`/`ftp_pass`). Pictures that cannot be converted or uploaded are skipped with a warning; the contact is still synced.
+- **FR-021**: System MUST verify that the configured FTP picture directory (`fritzbox.fonpix_dir`) is available on the FritzBox before any upload, when picture sync is configured and at least one contact has a picture. If the directory cannot be reached or created, the system MUST abort the sync with a clear, human-readable error to stderr and a non-zero exit code, leaving the existing phonebook and its pictures untouched (no picture or phonebook upload happens).
 
 ### Key Entities
 

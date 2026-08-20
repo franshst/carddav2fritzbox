@@ -12,8 +12,9 @@ import pytest
 import requests
 
 from src.config.loader import FritzBoxConfig
-from src.models.contact import Contact, PhoneNumber
+from src.models.contact import Contact, EmailAddress, PhoneNumber
 from src.services.converter import PhoneNumberNormalizer
+from src.services.fritzbox_images import image_key
 from src.services.fritzbox_uploader import FritzBoxUploader
 
 
@@ -446,3 +447,259 @@ class TestExportShortening:
         uploader = _make_uploader()
         xml = self._xml_for(uploader, "+4930123456")
         assert "+4930123456" in xml
+
+
+class TestNameOrderExport:
+    """Tests for FR-015: name_order applied to the <realName> export."""
+
+    def _xml_for(self, uploader, name):
+        contact = Contact(
+            name=name, phone_numbers=[PhoneNumber("030123456", type="home", prio=1)]
+        )
+        return uploader._generate_phonebook_xml([contact], "Test")
+
+    def test_default_first_name_first(self):
+        """The default keeps 'First Last'."""
+        uploader = _make_uploader()
+        xml = self._xml_for(uploader, "John Doe")
+        assert "<realName>John Doe</realName>" in xml
+
+    def test_last_name_first(self):
+        """last_name_first renders 'Last, First'."""
+        uploader = _make_uploader()
+        uploader.name_order = "last_name_first"
+        xml = self._xml_for(uploader, "John Doe")
+        assert "<realName>Doe, John</realName>" in xml
+        assert "<realName>John Doe</realName>" not in xml
+
+
+class TestPhonebookXMLConstraints:
+    """Tests for the FritzBox XML schema constraints (T039)."""
+
+    def _xml_for(self, uploader, phones, emails):
+        contact = Contact(name="John Doe", phone_numbers=phones, emails=emails)
+        return uploader._generate_phonebook_xml([contact], "Test")
+
+    def test_caps_phones_at_nine(self):
+        """Only 9 numbers (id 0-8) are emitted; excess are dropped."""
+        uploader = _make_uploader()
+        phones = [
+            PhoneNumber(f"0{i}2345678", type="home", prio=1 if i == 0 else 0)
+            for i in range(12)
+        ]
+        xml = self._xml_for(uploader, phones, [])
+        assert xml.count("<number") == 9
+
+    def test_sequential_ids_and_single_primary(self):
+        """id attributes are sequential and exactly one number has prio='1'."""
+        uploader = _make_uploader()
+        phones = [
+            PhoneNumber("030123456", type="home", prio=1),
+            PhoneNumber("030654321", type="mobile", prio=0),
+        ]
+        xml = self._xml_for(uploader, phones, [])
+        assert 'id="0"' in xml
+        assert 'id="1"' in xml
+        assert xml.count('prio="1"') == 1
+
+    def test_caps_emails_at_two(self):
+        """Only 2 email addresses (private + work) are emitted."""
+        uploader = _make_uploader()
+        emails = [
+            EmailAddress(
+                f"e{i}@example.com",
+                classifier="private" if i % 2 == 0 else "work",
+            )
+            for i in range(4)
+        ]
+        xml = self._xml_for(uploader, [], emails)
+        assert xml.count("<email") == 2
+        assert "e0@example.com" in xml
+        assert "e1@example.com" in xml
+        assert "e2@example.com" not in xml
+
+
+class TestPictureExport:
+    """Tests for FR-020: contact picture synced into the FritzBox export."""
+
+    def _xml_for(self, contact, image_urls=None):
+        uploader = _make_uploader()
+        return uploader._generate_phonebook_xml([contact], "Test", image_urls)
+
+    def test_picture_data_omitted_without_image_sync(self):
+        """Without FTP image sync configured, inline picture_data is omitted
+        (the box cannot display embedded data URIs; FR-020)."""
+        contact = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber("030123456")],
+            picture_data=b"\xff\xd8fakejpeg",
+        )
+        xml = self._xml_for(contact)
+        assert "data:image/jpeg;base64," not in xml
+        assert "imageURL" not in xml
+
+    def test_picture_data_references_uploaded_file(self):
+        """Uploaded picture files are referenced via a file:/// URL."""
+        contact = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber("030123456")],
+            picture_data=b"\xff\xd8fakejpeg",
+        )
+        image_urls = {
+            image_key(contact): (
+                "file:///var/InternerSpeicher/FRITZ/fonpix/1_1700000000.jpg"
+            )
+        }
+        xml = self._xml_for(contact, image_urls)
+        assert "file:///var/InternerSpeicher/FRITZ/fonpix/1_1700000000.jpg" in xml
+        assert "data:image/jpeg;base64," not in xml
+
+    def test_picture_upload_failed_omits_image_url(self):
+        """A contact whose upload failed emits no imageURL element."""
+        contact = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber("030123456")],
+            picture_data=b"\xff\xd8fakejpeg",
+        )
+        xml = self._xml_for(contact, {})
+        assert "imageURL" not in xml
+
+    def test_external_picture_url_kept(self):
+        """An external photo URI is used as the imageURL."""
+        contact = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber("030123456")],
+            picture_url="https://example.com/avatar.png",
+        )
+        xml = self._xml_for(contact)
+        assert "https://example.com/avatar.png" in xml
+
+    def test_no_picture_no_image_url(self):
+        """A contact without a picture emits no imageURL element."""
+        contact = Contact(name="John Doe", phone_numbers=[PhoneNumber("030123456")])
+        xml = self._xml_for(contact)
+        assert "imageURL" not in xml
+
+
+class TestImageSyncWiring:
+    """The upload flow wires the FTP uploader into the generated XML (FR-020)."""
+
+    def test_upload_phonebook_writes_uploaded_file_url(self, monkeypatch):
+        uploader = _make_uploader()
+        uploader.session_id = "0123456789abcdef"
+        uploader.config.fonpix_dir = "/FRITZ/fonpix"
+        uploader.config.imagepath = "file:///var/InternerSpeicher/FRITZ/fonpix"
+        captured = {}
+
+        class _StubUploader:
+            def check_directory(self):
+                return True
+
+            def sync_images(self, contacts):
+                assert contacts[0].name == "John Doe"
+                return {
+                    image_key(contacts[0]): (
+                        "file:///var/InternerSpeicher/FRITZ/fonpix/5_1700000000.jpg"
+                    )
+                }
+
+        monkeypatch.setattr(
+            FritzBoxUploader,
+            "_build_image_uploader",
+            lambda self: _StubUploader(),
+        )
+
+        def fake_post(url, files, timeout):
+            captured["xml"] = files["PhonebookImportFile"][1].decode("utf-8")
+
+            class FakeResponse:
+                text = "<p>is hersteld.</p>"
+
+                def raise_for_status(self):
+                    pass
+
+            return FakeResponse()
+
+        monkeypatch.setattr("src.services.fritzbox_uploader.requests.post", fake_post)
+
+        contact = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber("030123456")],
+            picture_data=b"\xff\xd8fakejpeg",
+            unique_id=5,
+        )
+        assert uploader.upload_phonebook([contact], "Test", 0) is True
+        assert (
+            "file:///var/InternerSpeicher/FRITZ/fonpix/5_1700000000.jpg"
+            in captured["xml"]
+        )
+
+    def test_upload_phonebook_aborts_when_picture_dir_unavailable(self, monkeypatch):
+        """An unavailable FTP picture directory aborts before any upload
+        (FR-021): the phonebook stays intact and no request is made."""
+        uploader = _make_uploader()
+        uploader.session_id = "0123456789abcdef"
+        uploader.config.fonpix_dir = "/FRITZ/fonpix"
+        uploader.config.imagepath = "file:///var/InternerSpeicher/FRITZ/fonpix"
+        posted = []
+
+        class _StubUploader:
+            def check_directory(self):
+                return False
+
+            def sync_images(self, contacts):
+                raise AssertionError("sync_images must not run after a failed check")
+
+        monkeypatch.setattr(
+            FritzBoxUploader,
+            "_build_image_uploader",
+            lambda self: _StubUploader(),
+        )
+
+        def fake_post(url, files, timeout):
+            posted.append(files)
+
+            class FakeResponse:
+                text = "<p>is hersteld.</p>"
+
+                def raise_for_status(self):
+                    pass
+
+            return FakeResponse()
+
+        monkeypatch.setattr("src.services.fritzbox_uploader.requests.post", fake_post)
+
+        contact = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber("030123456")],
+            picture_data=b"\xff\xd8fakejpeg",
+            unique_id=5,
+        )
+        assert uploader.upload_phonebook([contact], "Test", 0) is False
+        assert posted == []
+
+    def test_upload_phonebook_omits_picture_without_config(self, monkeypatch):
+        uploader = _make_uploader()
+        uploader.session_id = "0123456789abcdef"
+        captured = {}
+
+        def fake_post(url, files, timeout):
+            captured["xml"] = files["PhonebookImportFile"][1].decode("utf-8")
+
+            class FakeResponse:
+                text = "<p>is hersteld.</p>"
+
+                def raise_for_status(self):
+                    pass
+
+            return FakeResponse()
+
+        monkeypatch.setattr("src.services.fritzbox_uploader.requests.post", fake_post)
+
+        contact = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber("030123456")],
+            picture_data=b"\xff\xd8fakejpeg",
+        )
+        assert uploader.upload_phonebook([contact], "Test", 0) is True
+        assert "imageURL" not in captured["xml"]

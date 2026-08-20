@@ -101,7 +101,7 @@ def load_and_validate_config(config_path: str) -> Optional[object]:
         return None
 
 
-def run_sync(config, dry_run: bool = False) -> bool:
+def run_sync(config, dry_run: bool = False) -> int:
     """Run the complete CardDAV to FritzBox sync process.
 
     Args:
@@ -109,11 +109,12 @@ def run_sync(config, dry_run: bool = False) -> bool:
         dry_run: If True, only validate without actually syncing
 
     Returns:
-        True if sync completes successfully, False otherwise
+        Exit code (contracts/cli.md): 0 on success, 2 on connection error,
+        3 on sync error, 4 on an unexpected/general error.
     """
+    logger = setup_logger("carddav_sync", log_level="INFO")
+
     try:
-        # Setup logger
-        logger = setup_logger("carddav_sync", log_level="INFO")
         logger.info("Starting CardDAV to FritzBox sync process")
 
         # Initialize services
@@ -131,13 +132,18 @@ def run_sync(config, dry_run: bool = False) -> bool:
         )
 
         logger.info("Initializing FritzBox uploader...")
-        uploader = FritzBoxUploader(config.fritzbox, logger, normalizer=normalizer)
+        uploader = FritzBoxUploader(
+            config.fritzbox,
+            logger,
+            normalizer=normalizer,
+            name_order=config.general.name_order,
+        )
 
         # Test FritzBox connection
         logger.info("Testing FritzBox connection...")
         if not uploader.test_connection():
             logger.error("Failed to connect to FritzBox")
-            return False
+            return 2
 
         # Fetch contacts from CardDAV sources
         logger.info("Fetching contacts from CardDAV sources...")
@@ -145,7 +151,7 @@ def run_sync(config, dry_run: bool = False) -> bool:
 
         if not contacts:
             logger.warning("No contacts found in CardDAV sources")
-            return True
+            return 0
 
         logger.info(f"Fetched {len(contacts)} contacts")
 
@@ -178,7 +184,7 @@ def run_sync(config, dry_run: bool = False) -> bool:
                     f"{len(contact.emails)} emails"
                 )
             logger.info("Dry run completed successfully")
-            return True
+            return 0
 
         # Upload contacts to FritzBox (target book is resolved by name via TR-064)
         logger.info("Uploading contacts to FritzBox...")
@@ -190,78 +196,14 @@ def run_sync(config, dry_run: bool = False) -> bool:
 
         if success:
             logger.info("Sync process completed successfully")
-            return True
+            return 0
         else:
             logger.error("Sync process failed")
-            return False
+            return 3
 
     except Exception as e:
         logger.error(f"Unexpected error during sync: {e}")
-        return False
-
-
-def print_help_and_exit():
-    """Print help information and exit."""
-    help_text = """
-CardDAV to FritzBox Sync Utility
-================================
-
-This utility synchronizes contacts from multiple CardDAV sources to a FritzBox device.
-
-Usage:
-  python main.py --config config.ini
-
-Configuration file requirements:
-  - [general] section with name_order setting
-  - [fritzbox] section with connection details
-  - [regional] section with country/region codes
-  - Multiple [source_X] sections for CardDAV sources
-
-Example configuration:
-
-[general]
-name_order = first_name_first
-
-[fritzbox]
-url = https://fritz.box
-username = your_username
-password = your_password
-target_book = CardDAV Sync
-country = DE
-region = DE
-
-[regional]
-country_code = +49                 # REQUIRED (FR-017)
-area_code = 30                     # REQUIRED (FR-017)
-international_access_code = 00     # REQUIRED for normalization (FR-005)
-
-[source_1]
-url = https://nextcloud.example.com
-username = user1
-password = pass1
-priority = 1
-
-source_2
-url = https://caldav.example.com
-username = user2
-password = pass2
-priority = 2
-
-Commands:
-  --config PATH      Path to configuration file (required)
-  --log-level LEVEL  Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-  --dry-run          Show what would be synced without actually doing it
-  --validate-only    Validate configuration and exit
-
-Exit codes:
-  0 - Success
-  1 - Configuration error
-  2 - Connection error
-  3 - Sync error
-  4 - General error
-    """
-    print(help_text)
-    sys.exit(1)
+        return 4
 
 
 def main():
@@ -289,14 +231,13 @@ def main():
         return 1
 
     # Run sync process
-    success = run_sync(config, dry_run=args.dry_run)
+    exit_code = run_sync(config, dry_run=args.dry_run)
 
-    if success:
+    if exit_code == 0:
         logger.info("Sync completed successfully")
-        return 0
     else:
         logger.error("Sync failed")
-        return 3
+    return exit_code
 
 
 if __name__ == "__main__":

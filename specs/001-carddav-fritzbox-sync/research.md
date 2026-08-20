@@ -171,7 +171,7 @@ with a warning.
 | `<contact>` | Child of `<phonebook>` | Container for one contact entry. |
 | `<category>` | `0` (Standard), `1` (VIP) | Category classification. Default to `0`. |
 | `<person>/<realName>` | String (UTF-8) | Display name of contact. Required. |
-| `<person>/<imageURL>` | String / HTTP URL | URL or local path to contact avatar. Optional. |
+| `<person>/<imageURL>` | `file:///` path or HTTP URL | Reference to a picture file stored on the box itself (internal/USB storage), or an external HTTP URL. Optional. |
 | `<telephony>` | Attr: `nid="<count>"` | Container for phone numbers. `nid` is number of child `<number>` tags. |
 | `<telephony>/<number>` | Attrs: `type`, `prio`, `id`, `quickdial`, `vanity` | `type` can be `home`, `mobile`, `work`, `fax`. `prio` is `1` (primary) or `0`. |
 | `<services>/<email>` | Attrs: `classifier`, `id` | `classifier` can be `private` or `work`. `id` is 0-indexed. |
@@ -204,7 +204,7 @@ with a warning.
 | `TEL;TYPE=fax` | `<telephony>/<number type="fax">` | Normalized phone string | Map to `type="fax"`. |
 | `EMAIL;TYPE=home`, `internet` | `<services>/<email classifier="private">` | Email address string | Map to `classifier="private"`, assign `id="0"`, `id="1"`, etc. |
 | `EMAIL;TYPE=work` | `<services>/<email classifier="work">` | Email address string | Map to `classifier="work"`. |
-| `PHOTO` | `<person>/<imageURL>` | File path / URL | Converted JPG image path or HTTP URL (see T006). |
+| `PHOTO` | `<person>/<imageURL>` | `file:///` URL to an uploaded JPEG | Converted JPG is uploaded over FTP into the box's `fonpix` dir and referenced via the configured `file:///` URL; external HTTP URI is written as-is (see §7). |
 | `CATEGORIES` | `<category>` | `0` (Standard) or `1` (VIP) | Set to `1` if `CATEGORIES` contains `"VIP"`, otherwise `0`. |
 
 ### 6.2 FritzBox Field Capacity & Constraints
@@ -281,7 +281,43 @@ def convert_vcard_photo_to_jpg(photo_data: str, is_base64: bool = True) -> bytes
 
 ### 7.4 Fallback Strategy & Exception Handling
 - **Missing or Corrupted Images**: If `PHOTO` parsing, Base64 decoding, or `Pillow` processing encounters an error, log a warning to `stderr` and omit `<imageURL>` (leave as empty string `<imageURL></imageURL>`).
+- **Image sync not configured**: If a contact carries an inline picture but neither `fritzbox.fonpix_dir` nor `fritzbox.imagepath` is set, log a warning to `stderr` and omit `<imageURL>` (embedded data URIs are not resolved by the box; see §7.5).
+- **Upload failure**: If the FTP upload fails for a picture, log a warning and omit `<imageURL>` for that contact only; the rest of the sync proceeds.
 - **Graceful Failure**: Non-interactive execution must never fail due to an invalid avatar image format.
+
+### 7.5 Delivery Mechanism: FTP Upload + `file:///` URL (verified)
+
+The FritzBox `<imageURL>` element is a **reference to a picture file stored on
+the box's own storage** (internal or USB), not embedded image data. Evidence:
+
+- AVM's own phonebook exports store pictures as files and reference them via
+  `file:///var/InternerSpeicher/FRITZ/fonpix/<timestamp>-<n>.jpg`; on boxes
+  with a USB stick the path lives under the stick's mount instead.
+- AVM Support confirms pictures are **not** backed up / restored with the
+  phonebook XML.
+- Community tooling confirms the pattern: andig/carddav2fb (PHP) FTP-uploads
+  converted JPEGs into the box's `fonpix` directory (`ftp_connect` / explicit
+  FTPS, passive mode, `[UID]_[YmdHis].jpg` filenames, size-based re-upload
+  skip, stale-file cleanup) and writes the matching `file:///...` URL into
+  `imageURL`; vcard2fritzXML and fritzXML2vcard do not handle pictures at all.
+
+Accordingly the sync delivers pictures out-of-band over FTP:
+
+1. Convert inline `PHOTO` data to baseline JPEG ≤300×300 (already done in §7.3).
+2. **Pre-flight check (FR-021)**: `FritzBoxImageUploader.check_directory()` opens the FTP connection and verifies `fonpix_dir` exists on the box (creating it when possible). When the directory is unavailable the sync aborts with a clear error before any upload, so the existing phonebook stays intact.
+3. `FritzBoxImageUploader` (`src/services/fritzbox_images.py`, stdlib `ftplib`)
+   opens plain FTP or explicit FTPS (passive mode) on the box, `cwd`s into
+   `fonpix_dir` (creating it when missing), and stores each picture as
+   `<key>_<epoch>.jpg` where the key is the vCard UID or a stable identity
+   digest.
+4. A managed file whose `SIZE` equals the current picture is reused (no
+   re-upload); stale files per key and orphaned managed files (keys no longer
+   in the address book) are deleted. The `<key>_<epoch>.jpg` underscore
+   separator keeps files the box itself created (`<timestamp>-<n>.jpg`)
+   untouched.
+5. The resulting `imagepath + filename` (`file:///...`) is written into
+   `<imageURL>`; upload failures and unconfigured picture sync omit the element
+   with a warning (FR-020).
 
 ---
 

@@ -16,7 +16,6 @@ from src.services.carddav_fetcher import CardDAVFetcher
 from src.services.converter import (
     ImageConverter,
     PhoneNumberNormalizer,
-    extract_phone_number_info,
     process_contact_photos,
     validate_and_normalize_contact,
 )
@@ -24,18 +23,15 @@ from src.services.fritzbox_uploader import (
     ContactXML,
     FritzBoxUploader,
     PhonebookXML,
-    XMLGenerator,
 )
 
 __all__ = [
     "CardDAVFetcher",
     "FritzBoxUploader",
-    "XMLGenerator",
     "PhonebookXML",
     "ContactXML",
     "PhoneNumberNormalizer",
     "ImageConverter",
-    "extract_phone_number_info",
     "process_contact_photos",
     "validate_and_normalize_contact",
 ]

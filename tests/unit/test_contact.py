@@ -137,16 +137,6 @@ class TestContactIdentity:
         )
         assert contact1.has_same_identity(contact2) is True
 
-    def test_identity_includes_canonical_primary_phone(self):
-        contact1 = Contact(
-            name="John Doe",
-            phone_numbers=[PhoneNumber(number="+4930123456", type="home", prio=1)],
-            emails=[],
-        )
-        identity = contact1.get_normalized_identity(**REGIONAL_DE)
-        assert "John Doe" in identity
-        assert "+4930123456" in identity
-
 
 class TestMergeWithDedup:
     """Multi-value fields are appended only when unique (FR-004)."""
@@ -216,6 +206,43 @@ class TestMergeWithDedup:
         merged = contact1.merge_with(contact2)
         assert len(merged.phone_numbers) == 1
         assert len(merged.emails) == 1
+
+    # --- FR-004 fill-in rule for single-occurrence fields ---
+
+    def test_picture_filled_from_lower_priority(self):
+        """A higher-priority contact without a picture adopts the picture from
+        the lower-priority source (fill-in rule, FR-004/FR-020)."""
+        high = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="+4930123456")],
+            picture_data=None,
+            picture_url=None,
+        )
+        low = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="+4930123456")],
+            picture_data=b"jpg-bytes",
+            picture_url=None,
+        )
+        merged = high.merge_with(low, **REGIONAL_DE)
+        assert merged.picture_data == b"jpg-bytes"
+
+    def test_picture_kept_from_higher_priority(self):
+        """A higher-priority picture is never replaced by a lower-priority one."""
+        high = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="+4930123456")],
+            picture_data=b"high",
+            picture_url=None,
+        )
+        low = Contact(
+            name="John Doe",
+            phone_numbers=[PhoneNumber(number="+4930123456")],
+            picture_data=b"low",
+            picture_url=None,
+        )
+        merged = high.merge_with(low, **REGIONAL_DE)
+        assert merged.picture_data == b"high"
 
 
 if __name__ == "__main__":

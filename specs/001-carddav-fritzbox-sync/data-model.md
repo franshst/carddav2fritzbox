@@ -50,7 +50,7 @@ class Contact:
 - **Merge**:
   - Name: Taken from first source (canonical).
   - Multi-fields (phones, emails): Appended, deduplicated — identical values are kept once (first occurrence wins); phones compared in canonical normalized form, emails case-insensitively.
-  - Single-fields (picture, address): Taken from highest-priority source.
+  - Single-fields (picture, address): Filled by the first source that provides them (fill-in rule) — a lower-priority source supplies the value only when all higher-priority sources leave it empty.
 - **FritzBox Export**:
   - Write formatted name string to `<person>/<realName>`.
   - Convert `picture_base64` to binary (JPG).
