@@ -139,10 +139,12 @@ class TestPhoneNumberNormalizer:
         normalizer = PhoneNumberNormalizer("+49", "30", "00")
         assert normalizer.normalize("(abc)") == ""
 
-    def test_normalize_e164_without_plus(self):
-        """E.164 without '+' (e.g. Nextcloud '31703141414') stays intact."""
+    def test_normalize_bare_number_gets_country_and_area(self):
+        """Bare numbers (no '+', no '00/'0' prefix) are treated as local and
+        get country code + area code prepended (FR-005). International form
+        is recognised by the leading '+' only."""
         normalizer = PhoneNumberNormalizer("+31", "20", "00")
-        assert normalizer.normalize("31703141414") == "+31703141414"
+        assert normalizer.normalize("31703141414") == "+312031703141414"
         assert normalizer.normalize("0882692888") == "+31882692888"
 
     # --- FR-006 FritzBox shortening ---

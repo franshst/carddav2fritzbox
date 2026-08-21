@@ -33,26 +33,31 @@ class TestPhoneNumberCanonical:
     def test_sanitize_strips_non_numeric(self):
         assert PhoneNumber("  (030) 123-456 ").sanitize() == "030123456"
 
-    def test_country_code_without_plus_prepends_plus(self):
-        """E.164 without '+' is recognized and gets a '+' prefix only."""
-        assert (
-            PhoneNumber("31703141414").canonical(
-                country_code="+31", area_code="20", international_access_code="00"
-            )
-            == "+31703141414"
-        )
-
-    def test_country_code_without_plus_mobile(self):
-        """A mobile E.164 without '+' keeps the full number (FR-005)."""
+    def test_bare_number_without_prefix_gets_country_and_area(self):
+        """A bare number with no '+' / international access code / trunk '0'
+        is treated as a local number: country code + area code are prepended
+        (FR-005). Numbers are matched on the leading '+' only."""
         assert (
             PhoneNumber("31612345678").canonical(
                 country_code="+31", area_code="20", international_access_code="00"
             )
-            == "+31612345678"
+            == "+312031612345678"
         )
 
-    def test_country_code_without_plus_short_remainder_falls_back(self):
-        """A short remainder after the country digits is not treated as E.164."""
+    def test_bare_number_with_country_prefix_gets_area_prepend(self):
+        """A bare number starting with the country-code digits (and no '+')
+        is NOT recognised as E.164 without '+'; country + area are prepended
+        (FR-005). The '+' is the only international marker."""
+        assert (
+            PhoneNumber("31703141414").canonical(
+                country_code="+31", area_code="20", international_access_code="00"
+            )
+            == "+312031703141414"
+        )
+
+    def test_bare_number_short_remainder_falls_back(self):
+        """A short bare remainder after the country-code digits is also treated
+        as local (country + area prepended), never as international-without-'+'."""
         assert (
             PhoneNumber("317031").canonical(
                 country_code="+31", area_code="20", international_access_code="00"
