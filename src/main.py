@@ -21,6 +21,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
+import logging
 from typing import Optional
 
 from src.config.loader import load_config, print_config_summary
@@ -63,8 +64,8 @@ The configuration file (INI format) should contain:
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default="INFO",
-        help="Logging level (default: INFO)",
+        default="WARNING",
+        help="Logging level (default: WARNING)",
     )
 
     parser.add_argument(
@@ -83,36 +84,45 @@ The configuration file (INI format) should contain:
     return parser.parse_args()
 
 
-def load_and_validate_config(config_path: str) -> Optional[object]:
+def load_and_validate_config(
+    config_path: str, logger: Optional[logging.Logger] = None
+) -> Optional[object]:
     """Load and validate configuration file.
+
+    The configuration summary is only printed when ``logger`` is at INFO
+    level (or no logger is given), so the program stays silent at the default
+    WARNING level unless something may be wrong.
 
     Args:
         config_path: Path to configuration file
+        logger: Optional logger used to decide whether the summary is emitted.
 
     Returns:
         Loaded configuration object, or None if validation fails
     """
     try:
         config = load_config(config_path)
-        print_config_summary(config)
+        print_config_summary(config, logger=logger)
         return config
     except Exception as e:
         print(f"Error loading configuration: {e}", file=sys.stderr)
         return None
 
 
-def run_sync(config, dry_run: bool = False) -> int:
+def run_sync(config, dry_run: bool = False, log_level: str = "WARNING") -> int:
     """Run the complete CardDAV to FritzBox sync process.
 
     Args:
         config: Loaded configuration object
         dry_run: If True, only validate without actually syncing
+        log_level: Logging level for this run (default WARNING, so the
+            program is silent unless there is something to report).
 
     Returns:
         Exit code (contracts/cli.md): 0 on success, 2 on connection error,
-        3 on sync error, 4 on an unexpected/general error.
+        3 on sync error, 4 on a general/unexpected error.
     """
-    logger = setup_logger("carddav_sync", log_level="INFO")
+    logger = setup_logger("carddav_sync", log_level=log_level)
 
     try:
         logger.info("Starting CardDAV to FritzBox sync process")
@@ -216,9 +226,10 @@ def main():
     logger.info("CardDAV to FritzBox Sync Utility starting")
     logger.info(f"Config file: {args.config}")
 
-    # Load and validate configuration
+    # Load and validate configuration (the detailed summary is only printed
+    # at INFO or below; the validate-only result line itself is always shown).
     if args.validate_only:
-        config = load_and_validate_config(args.config)
+        config = load_and_validate_config(args.config, logger=logger)
         if config:
             print("✓ Configuration is valid")
             return 0
@@ -226,12 +237,12 @@ def main():
             print("✗ Configuration validation failed", file=sys.stderr)
             return 1
 
-    config = load_and_validate_config(args.config)
+    config = load_and_validate_config(args.config, logger=logger)
     if not config:
         return 1
 
     # Run sync process
-    exit_code = run_sync(config, dry_run=args.dry_run)
+    exit_code = run_sync(config, dry_run=args.dry_run, log_level=args.log_level)
 
     if exit_code == 0:
         logger.info("Sync completed successfully")

@@ -11,7 +11,7 @@ python src/main.py --config <path> [--log-level LEVEL] [--dry-run] [--validate-o
 | Flag | Required | Default | Description |
 |---|---|---|---|
 | `--config PATH` | Yes | — | Path to the INI configuration file. |
-| `--log-level LEVEL` | No | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
+| `--log-level LEVEL` | No | `WARNING` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. The default is `WARNING` so the program runs silently unless there is something to report; the configuration summary shown by `print_config_summary` is emitted only at `INFO` or below. |
 | `--dry-run` | No | off | Validate config, fetch/process contacts, and print a summary without uploading to FritzBox. |
 | `--validate-only` | No | off | Validate configuration and exit without fetching or syncing. |
 

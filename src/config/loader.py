@@ -42,6 +42,7 @@ priority = 2
 """
 
 import configparser
+import logging
 import os
 from dataclasses import dataclass
 from typing import List, Optional
@@ -382,8 +383,18 @@ def _validate_config(
         raise ValueError("Source priorities must be 1, 2, 3... without gaps")
 
 
-def print_config_summary(config: SyncConfig) -> None:
-    """Print a summary of the loaded configuration."""
+def print_config_summary(
+    config: SyncConfig, logger: Optional[logging.Logger] = None
+) -> None:
+    """Print a summary of the loaded configuration.
+
+    The summary is informational and therefore only emitted when ``logger``
+    is enabled for INFO (or when no logger is given, preserving backward
+    compatibility for direct callers). This keeps the program silent at the
+    default WARNING level unless there is something to report.
+    """
+    if logger is not None and not logger.isEnabledFor(logging.INFO):
+        return
     print("Configuration Summary:")
     print("  General:")
     print(f"    Name Order: {config.general.name_order}")

@@ -139,6 +139,15 @@ priority = 2
 python3 src/main.py --config config.ini
 ```
 
+By default the utility runs at `WARNING` level and is intentionally quiet — it
+prints nothing on a normal successful run (cron-friendly). Pass `--log-level
+INFO` to see the configuration summary and per-step progress, or `DEBUG` for
+verbose output. Warnings and errors always go to stderr.
+
+```bash
+python3 src/main.py --config config.ini --log-level INFO
+```
+
 Or for non-interactive cron execution:
 
 ```bash

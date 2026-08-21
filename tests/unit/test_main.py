@@ -1,5 +1,6 @@
 """Unit tests for CLI exit codes (contracts/cli.md)."""
 
+import logging
 from unittest.mock import patch
 
 from src.config.loader import (
@@ -9,7 +10,7 @@ from src.config.loader import (
     RegionalConfig,
     SyncConfig,
 )
-from src.main import run_sync
+from src.main import parse_arguments, run_sync
 from src.models.contact import Contact, PhoneNumber
 
 
@@ -71,3 +72,27 @@ def test_unexpected_error_returns_4():
         side_effect=RuntimeError("boom"),
     ):
         assert run_sync(_config()) == 4
+
+
+class TestDefaultLogLevel:
+    """The default log level is WARNING so the program runs silently (FR-008)."""
+
+    def test_parse_arguments_default_is_warning(self, monkeypatch):
+        """`--log-level` defaults to WARNING when omitted."""
+        monkeypatch.setattr("sys.argv", ["prog", "--config", "x.ini"])
+        args = parse_arguments()
+        assert args.log_level == "WARNING"
+
+    def test_run_sync_default_logger_is_warning(self):
+        """run_sync configures its logger at WARNING unless told otherwise."""
+        with patch("src.main.FritzBoxUploader.test_connection", return_value=False):
+            run_sync(_config())
+        logger = logging.getLogger("carddav_sync")
+        assert logger.level == logging.WARNING
+
+    def test_run_sync_respects_explicit_log_level(self):
+        """An explicit log_level is applied to the run_sync logger."""
+        with patch("src.main.FritzBoxUploader.test_connection", return_value=False):
+            run_sync(_config(), log_level="DEBUG")
+        logger = logging.getLogger("carddav_sync")
+        assert logger.level == logging.DEBUG

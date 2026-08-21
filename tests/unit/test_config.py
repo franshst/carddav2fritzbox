@@ -8,7 +8,8 @@ Tests the config loader module:
 
 import pytest
 
-from src.config.loader import SyncConfig, load_config
+from src.config.loader import SyncConfig, load_config, print_config_summary
+from src.utils.logger import setup_logger
 
 
 def _write_config(tmp_path, content: str) -> str:
@@ -427,3 +428,32 @@ class TestEnvVarCredentials:
         assert loaded.fritzbox.password == "fbp"
         assert loaded.sources[0].username == "su"
         assert loaded.sources[0].password == "sp"
+
+
+class TestConfigSummaryLogLevel:
+    """The configuration summary is only emitted at INFO or below (FR-008)."""
+
+    def _config(self, tmp_path) -> SyncConfig:
+        return load_config(
+            _write_config(
+                tmp_path, _build_config("country_code = +49\narea_code = 30\n")
+            )
+        )
+
+    def test_summary_silent_at_warning(self, tmp_path, capsys):
+        logger = setup_logger("test_summary_warning", log_level="WARNING")
+        print_config_summary(self._config(tmp_path), logger=logger)
+        captured = capsys.readouterr()
+        assert "Configuration Summary" not in captured.out
+
+    def test_summary_emitted_at_info(self, tmp_path, capsys):
+        logger = setup_logger("test_summary_info", log_level="INFO")
+        print_config_summary(self._config(tmp_path), logger=logger)
+        captured = capsys.readouterr()
+        assert "Configuration Summary" in captured.out
+
+    def test_summary_emitted_without_logger(self, tmp_path, capsys):
+        """A None logger preserves backward-compatible behaviour."""
+        print_config_summary(self._config(tmp_path), logger=None)
+        captured = capsys.readouterr()
+        assert "Configuration Summary" in captured.out
