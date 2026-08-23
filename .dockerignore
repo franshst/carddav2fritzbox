@@ -1,0 +1,7 @@
+# Whitelist build context: minimal and secret-free by construction (FR-013)
+*
+!src/
+!src/**
+!docker/
+!docker/entrypoint.py
+!docker/notify.py

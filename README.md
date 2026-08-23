@@ -378,6 +378,18 @@ For continuous integration, include virtual environment setup in your pipeline:
     pytest -v
 ```
 
+## Docker / Swarm
+
+The sync ships as a container for scheduled, unattended operation:
+
+- **Plain Docker** (single host, one-shot runs): see `docker/docker.md`
+- **Docker Swarm stack** (nightly schedule via swarm-cronjob, credentials as
+  Docker secrets, failure email): see `docker/swarm.md` — deploy with
+  `docker/deploy.sh`
+
+Both modes keep passwords exclusively in environment variables or secrets;
+the non-secret `config.ini` contains no credentials.
+
 ## Development
 
 ### Virtual Environment Management
