@@ -168,8 +168,8 @@ consulting other project files.
 - **FR-008**: The non-secret configuration (`config.ini` without embedded
   credentials) MUST be provided to the container without being baked into the
   image.
-- **FR-009**: A single example script MUST exist that creates all required
-  Docker secrets and deploys the stack.
+- **FR-009**: A single example script (`docker/deploy.sh`) MUST exist that creates all required
+  Docker secrets and deploys the stack; it MUST NOT build the image — deployment assumes an already-built image produced by `docker/build.sh` (see `003-docker-multiarch-build` FR-011) and referenced via `SYNC_IMAGE` (or the default `carddav2fritzbox:local` for single-host).
 - **FR-010**: All Docker/Swarm deliverables MUST reside in the `docker/`
   directory of the repository.
 - **FR-011**: Usage documentation MUST be provided separately for plain Docker
@@ -226,7 +226,6 @@ consulting other project files.
   documented in the stack file.
 - One-shot execution per trigger (a fresh run each time) rather than a
   long-running daemon is the intended model.
-- Building/publishing the image is part of development delivery; operators may
-  build locally from the repository.
+- The image is built separately via `docker/build.sh` (native `docker/build.sh` or cross `docker/build.sh --push -t <registry>:<tag>` per `003-docker-multiarch-build`); `docker/deploy.sh` (FR-009) expects an already-built image referenced via `SYNC_IMAGE` and does not build — operators do not build inside the deploy flow.
 - Overlapping runs are prevented by design (a missed trigger is skipped rather
   than queued); this is documented.

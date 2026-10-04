@@ -132,6 +132,8 @@ description: "Task list for Docker Swarm Deployment feature"
 - [x] T022 Run complete test suite `.venv/bin/pytest -v` ensuring existing sync tests remain green alongside new wrapper tests
 - [x] T023 Execute the full `specs/002-docker-swarm-deployment/quickstart.md` top-to-bottom as final end-to-end validation and record results
 - [x] T024 Update root `README.md` with a short "Docker / Swarm" section linking to `docker/docker.md` and `docker/swarm.md`
+- [x] T025 Create sample environment file `docker/.env.example` containing commented example values for every variable consumed by `docker/deploy.sh` and `docker/docker-compose.yml`: `SYNC_IMAGE` (default `carddav2fritzbox:local`), `SYNC_CRON` (default `0 3 * * *`), `TIMEZONE` (default `Europe/Amsterdam`), `SYNC_CONFIG_PATH` (default `./config.ini`), `SYNC_EXPECTED_SECRETS` (default `fritzbox_password`), `STACK_NAME` (default `carddav2fritzbox`), `SMTP_HOST`, `SMTP_PORT` (default `587`), `SMTP_STARTTLS` (default `true`), `SMTP_USERNAME`, `EMAIL_FROM`, `EMAIL_TO`; include header comment explaining that secrets (`FRITZBOX_PASSWORD`, `CARDDAV_*_PASSWORD`, `SMTP_PASSWORD`, `FTP_PASSWORD`) must NOT be placed in `.env` but created via `docker secret create` / `docker/deploy.sh`, and that real `.env` must be git-ignored
+- [x] T026 Update Swarm documentation `docker/swarm.md` to document the sample env file: add note in Prerequisites or §3/§4 that `docker/.env.example` lists all supported variables, show `cp docker/.env.example docker/.env` / edit workflow, explain that `docker stack deploy` and `docker/deploy.sh` read `.env` via compose interpolation, and link to `contracts/env-secrets.md` for secret vs. plain-env distinction
 
 ---
 
@@ -145,7 +147,7 @@ description: "Task list for Docker Swarm Deployment feature"
 - **US2 (Phase 4)**: needs Foundational; integrates with US1's deployed stack for validation but implementation is independent
 - **US3 (Phase 5)**: loader hooks into the same entrypoint; validation uses US1's stack; independent of US2
 - **US4 (Phase 6)**: documents the finished behaviours of US1–US3, so comes last
-- **Polish (Phase 7)**: after all stories
+- **Polish (Phase 7)**: after all stories — includes sample `.env` (T025 → T026, where T026 depends on T025)
 
 ### User Story Dependencies
 
@@ -163,6 +165,7 @@ Tests (where present) written first and verified failing → implementation → 
 - T002, T004 (and later T009, T013, T018) are single-file tasks runnable in parallel within/beside their phases
 - US2 and US3 implementations touch different files except two small entrypoint insertion points — coordinate T011/T014 or sequence them
 - With multiple developers: US2 and US3 can proceed simultaneously after Phase 3 checkpoint
+- T025 and T026 are sequential (T026 documents T025); both are independent of T021–T024 polish checks and can run in parallel with lint/test tasks
 
 ```bash
 # Example parallel batch after Foundational:

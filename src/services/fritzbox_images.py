@@ -26,22 +26,31 @@ from src.models.contact import Contact
 _MANAGED_FILE_RE = re.compile(r"^([0-9a-zA-Z._-]+)_(\d{10})\.jpg$")
 
 
-def image_key(contact: Contact) -> str:
-    """Return a stable per-contact key used to name its image file.
-
-    Prefers the numeric vCard UID when present; otherwise a short digest of the
-    contact's identity (name + canonical phones + emails) keeps the key stable
-    across sync runs even when the UID is missing.
-    """
-    if contact.unique_id is not None:
-        return str(contact.unique_id)
+def _identity_digest(contact: Contact, length: int = 12) -> str:
+    """Short SHA1 digest of a contact's identity (name + phones + emails)."""
     digest = hashlib.sha1()
     digest.update(contact.name.encode("utf-8", "replace"))
     for phone in sorted(p.number for p in contact.phone_numbers):
         digest.update(b"|" + phone.encode("utf-8", "replace"))
     for email in sorted(e.email.casefold() for e in contact.emails):
         digest.update(b"|" + email.encode("utf-8", "replace"))
-    return digest.hexdigest()[:12]
+    return digest.hexdigest()[:length]
+
+
+def image_key(contact: Contact) -> str:
+    """Return a stable per-contact key used to name its image file.
+
+    Combines the numeric vCard UID (when present) with a short digest of
+    the contact's identity (name + phones + emails). The UID alone is not
+    unique: it is only the first digit-run of the vCard UID, so distinct
+    contacts (e.g. UUID-style UIDs starting with the same digit) would
+    otherwise share one image file and one ``<imageURL>`` (FR-020). The
+    digest keeps the key stable across sync runs even when the UID is
+    missing or collides.
+    """
+    if contact.unique_id is not None:
+        return f"{contact.unique_id}-{_identity_digest(contact, 8)}"
+    return _identity_digest(contact)
 
 
 class FritzBoxImageUploader:
@@ -96,9 +105,18 @@ class FritzBoxImageUploader:
             Mapping of contact key to the ``file:///`` URL to write into
             ``<imageURL>``. Contacts without a picture are not included.
         """
-        by_key = {
-            image_key(contact): contact for contact in contacts if contact.picture_data
-        }
+        by_key: Dict[str, Contact] = {}
+        for contact in contacts:
+            if not contact.picture_data:
+                continue
+            key = image_key(contact)
+            if key in by_key:
+                self.logger.warning(
+                    f"Duplicate image key {key} for '{by_key[key].name}' and "
+                    f"'{contact.name}'; keeping the first picture"
+                )
+                continue
+            by_key[key] = contact
 
         try:
             ftp = self._connect()
@@ -110,6 +128,11 @@ class FritzBoxImageUploader:
             existing = self._list_managed(ftp)
             urls: Dict[str, str] = {}
             for key, contact in by_key.items():
+                self.logger.debug(
+                    f"Picture for '{contact.name}' (key {key}): "
+                    f"{len(contact.picture_data or b'')} bytes, "
+                    f"existing files {existing.get(key, [])}"
+                )
                 url = self._upload_contact(ftp, key, contact, existing.get(key, []))
                 if url is not None:
                     urls[key] = url
@@ -224,6 +247,10 @@ class FritzBoxImageUploader:
         for filename in existing:
             try:
                 if ftp.size(filename) == len(data):
+                    self.logger.debug(
+                        f"Picture for '{contact.name}' (key {key}): reusing "
+                        f"existing file {filename} ({len(data)} bytes)"
+                    )
                     return f"{self.imagepath}/{filename}"
             except ftplib.all_errors:
                 continue
@@ -237,7 +264,10 @@ class FritzBoxImageUploader:
 
         for old in existing:
             self._delete(ftp, old)
-        self.logger.info(f"Uploaded contact picture {filename}")
+        self.logger.info(
+            f"Uploaded contact picture for '{contact.name}' (key {key}): "
+            f"{filename} ({len(data)} bytes)"
+        )
         return f"{self.imagepath}/{filename}"
 
     def _delete(self, ftp: ftplib.FTP, filename: str) -> None:

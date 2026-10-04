@@ -543,12 +543,26 @@ class FritzBoxUploader:
             if image_urls:
                 url = image_urls.get(image_key(contact))
                 if url:
+                    self.logger.debug(
+                        f"Picture for '{contact.name}' "
+                        f"(key {image_key(contact)}): using {url}"
+                    )
                     return url
                 self.logger.warning(
                     f"Picture for {contact.name} could not be uploaded; "
                     "omitting imageURL"
                 )
+            else:
+                self.logger.debug(
+                    f"Picture for '{contact.name}' "
+                    f"(key {image_key(contact)}): no uploaded image "
+                    "available, omitting imageURL"
+                )
             return None
+        if contact.picture_url:
+            self.logger.debug(
+                f"Picture for '{contact.name}': external URL " f"{contact.picture_url}"
+            )
         return contact.picture_url
 
     def _image_sync_configured(self) -> bool:

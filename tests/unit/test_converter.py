@@ -336,6 +336,57 @@ class TestProcessContactPhotos:
         assert result.picture_data is None
         assert result.picture_url is None
 
+    def test_process_contact_photos_data_url_success(self):
+        """Test processing contact with a convertible data-URL photo."""
+        contact = Contact(
+            name="Test User",
+            phone_numbers=[],
+            picture_data=None,
+            picture_url="data:image/jpeg;base64,aGVsbG8=",
+        )
+        self.image_converter.convert_vcard_photo.return_value = (
+            b"converted_jpg_data",
+            None,
+        )
+
+        result = process_contact_photos(contact, self.image_converter)
+        assert result.picture_data == b"converted_jpg_data"
+        assert result.picture_url is None
+
+    def test_process_contact_photos_data_url_failure_warns(self):
+        """A data-URL photo that cannot be converted is dropped with a
+        warning naming the contact (FR-020 edge case)."""
+        contact = Contact(
+            name="Dirk Stuurman",
+            phone_numbers=[],
+            picture_data=None,
+            picture_url="data:image/jpeg;base64,!!!not-an-image!!!",
+        )
+        self.image_converter.convert_vcard_photo.return_value = (None, None)
+
+        result = process_contact_photos(contact, self.image_converter)
+        assert result.picture_data is None
+        assert result.picture_url is None
+        self.image_converter.logger.warning.assert_called_once()
+        assert "Dirk Stuurman" in self.image_converter.logger.warning.call_args[0][0]
+
+    def test_process_contact_photos_data_url_error_warns(self):
+        """A data-URL photo whose conversion raises is dropped with a
+        warning naming the contact (FR-020 edge case)."""
+        contact = Contact(
+            name="Dirk Stuurman",
+            phone_numbers=[],
+            picture_data=None,
+            picture_url="data:image/jpeg;base64,!!!not-an-image!!!",
+        )
+        self.image_converter.convert_vcard_photo.side_effect = ValueError("bad")
+
+        result = process_contact_photos(contact, self.image_converter)
+        assert result.picture_data is None
+        assert result.picture_url is None
+        self.image_converter.logger.warning.assert_called_once()
+        assert "Dirk Stuurman" in self.image_converter.logger.warning.call_args[0][0]
+
 
 class TestValidateAndNormalizeContact:
     """Test validate_and_normalize_contact function."""

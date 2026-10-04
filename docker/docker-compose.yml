@@ -34,7 +34,7 @@ secrets:
 
 services:
   carddav2fritzbox:
-    image: ${SYNC_IMAGE:-carddav2fritzbox:local}
+    image: ${SYNC_IMAGE:-carddav2fritzbox:local} # heterogeneous Swarm (amd64+arm64): must be a docker/build.sh --push manifest list, not a local tag
     # One-shot service: swarm-cronjob triggers an update of this service on
     # the schedule below; overlapping triggers are skipped while a task is
     # still running (spec Assumptions).

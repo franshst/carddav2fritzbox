@@ -6,14 +6,19 @@ Docker host — no Swarm required. For scheduled cluster deployment see
 
 ## 1. Build the image
 
-From the repository root:
+From the repository root (see `specs/003-docker-multiarch-build`):
 
-```bash
-docker build -f docker/Dockerfile -t carddav2fritzbox:local .
-```
+- Supported platforms: `linux/amd64` and `linux/arm64` (`docker/Dockerfile` is platform-agnostic, `python:3.13-alpine`)
+- Build via the dedicated build script (single source of truth — do not duplicate `docker build` elsewhere):
+  ```bash
+  docker/build.sh                          # native, tag carddav2fritzbox:local (current host)
+  docker/build.sh --push -t <registry>/carddav2fritzbox:<tag>  # cross linux/amd64,linux/arm64 and push manifest list
+  ```
+  Raw form (what the script wraps): `docker build -f docker/Dockerfile -t carddav2fritzbox:local .`
+  Verify multi-arch (after `--push`): `docker buildx imagetools inspect <registry>/carddav2fritzbox:<tag>` — expect `linux/amd64` + `linux/arm64` (see `specs/003-docker-multiarch-build/contracts/build-commands.md:60`).
 
 The image is Alpine-based, installs only the sync's runtime dependencies
-(no dev tools), and runs as a non-root user.
+(no dev tools), and runs as a non-root user. `docker/deploy.sh` does not build.
 
 ## 2. Prepare configuration
 

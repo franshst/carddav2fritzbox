@@ -545,13 +545,11 @@ class TestPictureExport:
             phone_numbers=[PhoneNumber("030123456")],
             picture_data=b"\xff\xd8fakejpeg",
         )
-        image_urls = {
-            image_key(contact): (
-                "file:///var/InternerSpeicher/FRITZ/fonpix/1_1700000000.jpg"
-            )
-        }
+        key = image_key(contact)
+        expected = f"file:///var/InternerSpeicher/FRITZ/fonpix/{key}_1700000000.jpg"
+        image_urls = {key: expected}
         xml = self._xml_for(contact, image_urls)
-        assert "file:///var/InternerSpeicher/FRITZ/fonpix/1_1700000000.jpg" in xml
+        assert expected in xml
         assert "data:image/jpeg;base64," not in xml
 
     def test_picture_upload_failed_omits_image_url(self):
@@ -563,6 +561,19 @@ class TestPictureExport:
         )
         xml = self._xml_for(contact, {})
         assert "imageURL" not in xml
+
+    def test_picture_without_upload_mapping_logs_contact(self, caplog):
+        """Inline picture data with an empty upload mapping is omitted, with
+        a per-contact diagnostic naming the contact (FR-008)."""
+        contact = Contact(
+            name="Dirk Stuurman",
+            phone_numbers=[PhoneNumber("030123456")],
+            picture_data=b"\xff\xd8fakejpeg",
+        )
+        with caplog.at_level("DEBUG", logger="test_fritzbox_auth"):
+            xml = self._xml_for(contact, {})
+        assert "imageURL" not in xml
+        assert any("Dirk Stuurman" in record.message for record in caplog.records)
 
     def test_external_picture_url_kept(self):
         """An external photo URI is used as the imageURL."""
@@ -597,9 +608,11 @@ class TestImageSyncWiring:
 
             def sync_images(self, contacts):
                 assert contacts[0].name == "John Doe"
+                key = image_key(contacts[0])
                 return {
-                    image_key(contacts[0]): (
-                        "file:///var/InternerSpeicher/FRITZ/fonpix/5_1700000000.jpg"
+                    key: (
+                        "file:///var/InternerSpeicher/FRITZ/fonpix/"
+                        f"{key}_1700000000.jpg"
                     )
                 }
 
@@ -629,10 +642,9 @@ class TestImageSyncWiring:
             unique_id=5,
         )
         assert uploader.upload_phonebook([contact], "Test", 0) is True
-        assert (
-            "file:///var/InternerSpeicher/FRITZ/fonpix/5_1700000000.jpg"
-            in captured["xml"]
-        )
+        key = image_key(contact)
+        expected = f"file:///var/InternerSpeicher/FRITZ/fonpix/{key}_1700000000.jpg"
+        assert expected in captured["xml"]
 
     def test_upload_phonebook_aborts_when_picture_dir_unavailable(self, monkeypatch):
         """An unavailable FTP picture directory aborts before any upload

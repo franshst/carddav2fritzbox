@@ -106,7 +106,19 @@ class TestImageKey:
     """The image key must be stable and unique per contact."""
 
     def test_uses_unique_id_when_present(self):
-        assert image_key(_contact(5)) == "5"
+        key = image_key(_contact(5))
+        assert key.startswith("5-")
+        assert key == image_key(_contact(5))
+
+    def test_same_unique_id_differs_for_different_contacts(self):
+        a = _contact(5, picture_data=b"\xff\xd8picture-a")
+        b = Contact(
+            name="Jane Doe",
+            phone_numbers=[PhoneNumber("030999999")],
+            picture_data=b"\xff\xd8picture-b",
+            unique_id=5,
+        )
+        assert image_key(a) != image_key(b)
 
     def test_hash_key_is_stable_without_unique_id(self):
         contact = Contact(
@@ -136,53 +148,83 @@ class TestSyncImages:
         _patch_ftplib(monkeypatch, fake)
         uploader = _uploader()
 
-        urls = uploader.sync_images([_contact(5)])
+        contact = _contact(5)
+        key = image_key(contact)
+        urls = uploader.sync_images([contact])
 
         assert len(fake.stored) == 1
-        assert fake.stored[0].startswith("5_")
+        assert fake.stored[0].startswith(f"{key}_")
         assert fake.stored[0].endswith(".jpg")
-        assert urls == {"5": f"{_IMAGEPATH}/{fake.stored[0]}"}
+        assert urls == {key: f"{_IMAGEPATH}/{fake.stored[0]}"}
         assert fake.pasv is True
         assert fake.quit_called is True
 
     def test_reuses_existing_file_with_matching_size(self, monkeypatch):
+        contact = _contact(5)
+        key = image_key(contact)
         fake = _FakeFTP()
-        fake.files["5_1700000000.jpg"] = b"\xff\xd8fakejpeg"
+        fake.files[f"{key}_1700000000.jpg"] = b"\xff\xd8fakejpeg"
         _patch_ftplib(monkeypatch, fake)
         uploader = _uploader()
 
-        urls = uploader.sync_images([_contact(5)])
+        urls = uploader.sync_images([contact])
 
         assert fake.stored == []
-        assert urls == {"5": f"{_IMAGEPATH}/5_1700000000.jpg"}
+        assert urls == {key: f"{_IMAGEPATH}/{key}_1700000000.jpg"}
 
     def test_removes_stale_files_for_same_key(self, monkeypatch):
+        contact = _contact(5)
+        key = image_key(contact)
         fake = _FakeFTP()
-        fake.files["5_1700000000.jpg"] = b"stale-stale-stale-bytes"
-        fake.files["5_1700000001.jpg"] = b"another-stale-bytes"
+        fake.files[f"{key}_1700000000.jpg"] = b"stale-stale-stale-bytes"
+        fake.files[f"{key}_1700000001.jpg"] = b"another-stale-bytes"
         _patch_ftplib(monkeypatch, fake)
         uploader = _uploader()
 
-        urls = uploader.sync_images([_contact(5)])
+        urls = uploader.sync_images([contact])
 
         assert len(fake.stored) == 1
-        assert fake.stored[0].startswith("5_")
-        assert "5_1700000000.jpg" in fake.deleted
-        assert "5_1700000001.jpg" in fake.deleted
+        assert fake.stored[0].startswith(f"{key}_")
+        assert f"{key}_1700000000.jpg" in fake.deleted
+        assert f"{key}_1700000001.jpg" in fake.deleted
         assert len(urls) == 1
 
-    def test_deletes_orphaned_managed_files(self, monkeypatch):
+    def test_same_unique_id_gets_separate_pictures(self, monkeypatch):
+        """Regression test: two contacts sharing a numeric UID (first
+        digit-run of UUID-style UIDs) must not share one image file."""
         fake = _FakeFTP()
-        fake.files["5_1700000000.jpg"] = b"\xff\xd8fakejpeg"
-        fake.files["6_1700000000.jpg"] = b"y"
+        _patch_ftplib(monkeypatch, fake)
+        uploader = _uploader()
+
+        a = _contact(2, picture_data=b"\xff\xd8picture-a")
+        b = Contact(
+            name="Jane Doe",
+            phone_numbers=[PhoneNumber("030999999")],
+            picture_data=b"\xff\xd8picture-b",
+            unique_id=2,
+        )
+        urls = uploader.sync_images([a, b])
+
+        assert len(urls) == 2
+        assert len(fake.stored) == 2
+        assert urls[image_key(a)] != urls[image_key(b)]
+
+    def test_deletes_orphaned_managed_files(self, monkeypatch):
+        contact = _contact(5)
+        key = image_key(contact)
+        other = _contact(6)
+        other_key = image_key(other)
+        fake = _FakeFTP()
+        fake.files[f"{key}_1700000000.jpg"] = b"\xff\xd8fakejpeg"
+        fake.files[f"{other_key}_1700000000.jpg"] = b"y"
         fake.files["box-owned-1700000000-0.jpg"] = b"z"
         _patch_ftplib(monkeypatch, fake)
         uploader = _uploader()
 
-        uploader.sync_images([_contact(5)])
+        uploader.sync_images([contact])
 
-        assert "6_1700000000.jpg" in fake.deleted
-        assert "5_1700000000.jpg" not in fake.deleted
+        assert f"{other_key}_1700000000.jpg" in fake.deleted
+        assert f"{key}_1700000000.jpg" not in fake.deleted
         assert fake.stored == []
         # Files not created by this tool are never touched.
         assert "box-owned-1700000000-0.jpg" not in fake.deleted

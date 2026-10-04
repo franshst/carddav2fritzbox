@@ -3,6 +3,8 @@
 config.ini
 *.conf
 .env*
+!.env.example
+!docker/.env.example
 .venv/
 
 # IDE and editor files

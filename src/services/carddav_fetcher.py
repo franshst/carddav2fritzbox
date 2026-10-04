@@ -394,8 +394,15 @@ class CardDAVFetcher:
             unique_id=unique_id,
         )
 
+        if picture_data:
+            picture_info = f"inline picture ({len(picture_data)} bytes)"
+        elif picture_url:
+            picture_info = f"external picture URL ({picture_url})"
+        else:
+            picture_info = "no picture"
         self.logger.debug(
-            f"Parsed vCard for contact '{name}' from source priority {source_priority}"
+            f"Parsed vCard for contact '{name}' from source priority "
+            f"{source_priority}: {picture_info}"
         )
         return contact
 
@@ -647,6 +654,10 @@ class CardDAVFetcher:
             )
 
             contact = self.parse_vcard_to_contact(vcard, source_priority)
+            self.logger.debug(
+                f"Contact '{contact.name}' came from source priority "
+                f"{source_priority} ({raw_contact['url']})"
+            )
             parsed_contacts.append(contact)
 
         self.logger.info(
@@ -688,12 +699,29 @@ class CardDAVFetcher:
             if existing_idx is None:
                 merged.append(contact)
             else:
+                existing = merged[existing_idx]
+                had_picture = bool(existing.picture_data or existing.picture_url)
+                had_name = existing.name
                 merged[existing_idx].merge_with(
                     contact,
                     regional.country_code,
                     regional.area_code,
                     regional.international_access_code,
                 )
+                if not had_picture and (existing.picture_data or existing.picture_url):
+                    if existing.picture_data:
+                        filled = f"inline {len(existing.picture_data)} bytes"
+                    else:
+                        filled = str(existing.picture_url)
+                    self.logger.debug(
+                        f"Merged contact '{had_name}': picture filled in "
+                        f"from lower-priority source (now {filled})"
+                    )
+                else:
+                    self.logger.debug(
+                        f"Merged duplicate of '{had_name}': kept existing "
+                        f"picture (had_picture={had_picture})"
+                    )
 
         self.logger.info(
             f"Merged {len(contacts)} contacts into {len(merged)} unique contacts"

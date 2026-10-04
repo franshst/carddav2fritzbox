@@ -300,12 +300,28 @@ def process_contact_photos(
     """
     if contact.picture_data:
         # Convert Base64 photo data to FritzBox-compatible JPG
+        in_size = len(contact.picture_data)
         jpg_data, _ = image_converter.convert_vcard_photo(
             contact.picture_data, photo_type="base64"
         )
         if jpg_data:
             contact.picture_data = jpg_data
+            if image_converter.logger:
+                image_converter.logger.debug(
+                    f"Picture for '{contact.name}': converted inline picture "
+                    f"{in_size} -> {len(jpg_data)} bytes"
+                )
         else:
+            if image_converter.logger:
+                image_converter.logger.warning(
+                    f"Picture for '{contact.name}': conversion failed, "
+                    "contact synced without a picture"
+                )
+            else:
+                print(
+                    f"Warning: Picture for '{contact.name}': conversion failed, "
+                    "contact synced without a picture"
+                )
             contact.picture_data = None
             contact.picture_url = None
 
@@ -313,6 +329,11 @@ def process_contact_photos(
         # For external URLs, attempt to convert if possible
         # Note: In production, this would require downloading the image
         # For now, keep as URL if it's a valid format
+        if image_converter.logger:
+            image_converter.logger.debug(
+                f"Picture for '{contact.name}': external URL "
+                f"({contact.picture_url})"
+            )
         if not (
             contact.picture_url.startswith("http://")
             or contact.picture_url.startswith("https://")
@@ -325,11 +346,25 @@ def process_contact_photos(
                         jpg_data, _ = image_converter.convert_vcard_photo(
                             data, photo_type="base64"
                         )
-                        if jpg_data:
-                            contact.picture_data = jpg_data
-                        contact.picture_url = None
                     except Exception:
-                        pass
+                        jpg_data = None
+                    if jpg_data:
+                        contact.picture_data = jpg_data
+                        if image_converter.logger:
+                            image_converter.logger.debug(
+                                f"Picture for '{contact.name}': converted "
+                                f"data-URL picture -> {len(jpg_data)} bytes"
+                            )
+                    else:
+                        message = (
+                            f"Picture for '{contact.name}': data-URL picture "
+                            "conversion failed, contact synced without a picture"
+                        )
+                        if image_converter.logger:
+                            image_converter.logger.warning(message)
+                        else:
+                            print(f"Warning: {message}")
+                    contact.picture_url = None
 
     return contact
 
