@@ -8,6 +8,7 @@ Note that newer FritzBoxes support a carddav sync natively. This project is uniq
 in that it can take several sources and merge into a single phone book, where it
 intelligently merges the same contact from multiple sources into a single one.
 
+Note, docker swarm support is not complete and untested.
 
 ## Features
 
