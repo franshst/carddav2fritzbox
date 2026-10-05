@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set
 
 
 def canonicalize_phone(
@@ -57,7 +57,7 @@ class PhoneNumber:
         """Normalize phone number by stripping non-numeric characters except
         a leading '+'.
         """
-        self.number = re.sub(r"[^0-9+]", "", self.number)
+        self.number = self.sanitize()
         return self
 
     def sanitize(self) -> str:
@@ -92,7 +92,7 @@ class PhoneNumber:
         """Normalize a phone number string by stripping all non-numeric characters
         (preserving leading '+' for country/international detection).
         """
-        return re.sub(r"[^0-9+]", "", phone)
+        return PhoneNumber(phone).sanitize()
 
 
 @dataclass
@@ -103,10 +103,6 @@ class EmailAddress:
     def is_primary(self) -> bool:
         """Check if this is the primary email address."""
         return self.classifier == "private"
-
-    def format_for_fritzbox(self) -> Tuple[str, str]:
-        """Format email address for FritzBox XML export."""
-        return (self.email, self.classifier)
 
 
 @dataclass
@@ -216,14 +212,6 @@ class Contact:
         return self.has_same_identity(
             other, country_code, area_code, international_access_code
         )
-
-    def get_all_phone_numbers(self) -> List[str]:
-        """Get all phone numbers from the contact."""
-        return [phone.number for phone in self.phone_numbers]
-
-    def get_all_email_addresses(self) -> List[str]:
-        """Get all email addresses from the contact."""
-        return [email.email for email in self.emails]
 
     def has_same_identity(
         self,

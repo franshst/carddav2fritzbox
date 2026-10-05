@@ -21,7 +21,6 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
-from xml.dom import minidom
 
 import requests
 
@@ -36,15 +35,6 @@ from src.services.tr064 import Tr064Client
 # contact; exactly one number carries prio="1".
 _MAX_PHONE_NUMBERS = 9
 _MAX_EMAIL_ADDRESSES = 2
-
-
-@dataclass
-class FritzBoxAuthentication:
-    """Authentication credentials for FritzBox connection."""
-
-    username: str
-    password: str
-    host: str = "fritz.box"
 
 
 @dataclass
@@ -583,19 +573,14 @@ class FritzBoxUploader:
         )
 
     def _pretty_print_xml(self, xml_bytes: bytes) -> str:
-        """Format XML with proper indentation.
-
-        Args:
-            xml_bytes: XML content as bytes
-
-        Returns:
-            Pretty-printed XML as string
-        """
+        """Format XML with proper indentation."""
         try:
-            dom = minidom.parseString(xml_bytes.decode("utf-8"))
-            return dom.toprettyxml(indent="  ", encoding="utf-8").decode("utf-8")
+            root = ET.fromstring(xml_bytes)
+            ET.indent(root, space="  ")
+            return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode(
+                "utf-8"
+            )
         except Exception:
-            # Fallback to simple formatting
             return xml_bytes.decode("utf-8")
 
     def _upload_to_fritzbox(

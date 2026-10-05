@@ -47,19 +47,6 @@ class CardDAVFetcher:
         self.config = config
         self.logger = logger
         self.timeout = _TIMEOUT
-        self.supported_contact_properties = self._get_supported_contact_properties()
-
-    def _get_supported_contact_properties(self) -> set:
-        """Get set of supported vCard properties for mapping."""
-        return {
-            "fn",  # Formatted Name
-            "n",  # Structured Name
-            "tel",  # Telephone number
-            "email",  # Email address
-            "photo",  # Photo/image
-            "categories",  # Contact categories (VIP, etc.)
-            "uid",  # Unique ID
-        }
 
     def fetch_all_contacts(self) -> List[Dict[str, Any]]:
         """Fetch all contacts from all CardDAV sources.
@@ -647,11 +634,9 @@ class CardDAVFetcher:
         for raw_contact in raw_contacts:
             vcard = raw_contact["data"]
 
-            # Prefer the configured source priority (FR-013); fall back to a
-            # URL heuristic for callers that do not provide one.
-            source_priority = raw_contact.get("source_priority") or (
-                self._extract_source_priority_from_url(raw_contact["url"])
-            )
+            # Configured source priority (FR-013); default 1 for callers
+            # that do not provide one.
+            source_priority = raw_contact.get("source_priority") or 1
 
             contact = self.parse_vcard_to_contact(vcard, source_priority)
             self.logger.debug(
@@ -727,30 +712,6 @@ class CardDAVFetcher:
             f"Merged {len(contacts)} contacts into {len(merged)} unique contacts"
         )
         return merged
-
-    def _extract_source_priority_from_url(self, url: str) -> int:
-        """Extract source priority from CardDAV URL.
-
-        This is a heuristic implementation to determine priority from URL patterns.
-        In a real implementation, priority would be clearly defined in the
-        configuration rather than inferred from URLs.
-
-        Args:
-            url: CardDAV source URL
-
-        Returns:
-            Integer priority (1=highest, 2=next, etc.)
-        """
-        # Simple heuristic based on URL patterns
-        # In real implementation, use explicit priority from config
-        if "nextcloud" in url.lower():
-            return 1
-        elif "caldav" in url.lower():
-            return 2
-        elif "carddav" in url.lower():
-            return 3
-        else:
-            return 1  # Default priority
 
     def test_connection(self, source_config) -> bool:
         """Test connection to a CardDAV source.

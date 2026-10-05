@@ -35,12 +35,3 @@ def setup_logger(
         logger.addHandler(handler)
 
     return logger
-
-
-def log_error_and_exit(
-    logger: logging.Logger, message: str, exit_code: int = 1
-) -> None:
-    """Logs human-readable error message to stderr and exits with non-zero status."""
-    print(f"ERROR: {message}", file=sys.stderr)
-    logger.error(message)
-    sys.exit(exit_code)

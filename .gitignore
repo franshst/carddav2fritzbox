@@ -74,5 +74,8 @@ logs/
 .venv/
 
 #speckit session files
-./specify/feature.json
+.specify/feature.json
+.specify/extensions
 
+#node modules from opencode plugins
+node_modules/
